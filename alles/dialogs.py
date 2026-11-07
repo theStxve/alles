@@ -551,3 +551,130 @@ class UpdateDialog(tk.Toplevel):
             self._failed(f"Update konnte nicht installiert werden: {exc}")
             return
         self.app.quit()
+
+
+class RenameDialog(tk.Toplevel):
+    """F2: rename one item (stem pre-selected) or many items with a live preview."""
+
+    def __init__(self, app: AllesApp, rows):
+        from . import rename
+        super().__init__(app.root)
+        self.app, self.rows, self.r = app, rows, rename
+        self.single = len(rows) == 1
+        self.title("Umbenennen" if self.single else f"{len(rows)} Elemente umbenennen")
+        self.transient(app.root)
+        theme.style_toplevel(self, app.palette)
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill=tk.BOTH, expand=True)
+        frm.columnconfigure(1, weight=1)
+        self.mode = tk.StringVar(value=rename.MODE_TEMPLATE if self.single
+                                 else rename.MODE_REPLACE)
+        self.find, self.repl = tk.StringVar(), tk.StringVar()
+        self.regex, self.case = tk.BooleanVar(), tk.BooleanVar()
+        self.template = tk.StringVar(value=rows[0].name if self.single else "{name}_{n:02}")
+        self.start = tk.StringVar(value="1")
+        self.info = tk.StringVar()
+
+        if self.single:
+            ttk.Label(frm, text="Neuer Name:").grid(row=0, column=0, sticky="w")
+            entry = ttk.Entry(frm, textvariable=self.template, width=60)
+            entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+            stem, _ = rename.split_name(rows[0].name, rows[0].is_dir)
+            entry.focus_set()
+            entry.selection_range(0, len(stem))
+            entry.icursor(len(stem))
+            row = 2
+        else:
+            ttk.Radiobutton(frm, text="Suchen und ersetzen", value=rename.MODE_REPLACE,
+                            variable=self.mode, command=self._refresh).grid(
+                row=0, column=0, columnspan=2, sticky="w")
+            ttk.Label(frm, text="Suchen:").grid(row=1, column=0, sticky="w", padx=(20, 6))
+            ttk.Entry(frm, textvariable=self.find).grid(row=1, column=1, sticky="ew", pady=2)
+            ttk.Label(frm, text="Ersetzen:").grid(row=2, column=0, sticky="w", padx=(20, 6))
+            ttk.Entry(frm, textvariable=self.repl).grid(row=2, column=1, sticky="ew", pady=2)
+            opts = ttk.Frame(frm)
+            opts.grid(row=3, column=1, sticky="w")
+            ttk.Checkbutton(opts, text="Regulärer Ausdruck", variable=self.regex,
+                            command=self._refresh).pack(side=tk.LEFT)
+            ttk.Checkbutton(opts, text="Groß/Klein beachten", variable=self.case,
+                            command=self._refresh).pack(side=tk.LEFT, padx=10)
+            ttk.Radiobutton(frm, text="Neuer Name mit Platzhaltern", value=rename.MODE_TEMPLATE,
+                            variable=self.mode, command=self._refresh).grid(
+                row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            ttk.Label(frm, text="Muster:").grid(row=5, column=0, sticky="w", padx=(20, 6))
+            ttk.Entry(frm, textvariable=self.template).grid(row=5, column=1, sticky="ew", pady=2)
+            ttk.Label(frm, text="Start bei:").grid(row=6, column=0, sticky="w", padx=(20, 6))
+            ttk.Spinbox(frm, from_=0, to=99999, textvariable=self.start, width=8).grid(
+                row=6, column=1, sticky="w", pady=2)
+            ttk.Label(frm, text="{name} Name  ·  {n} / {n:03} Nummer  ·  {ext} Endung  ·  "
+                                "{date} / {date:%Y-%m} Änderungsdatum", style="Hint.TLabel").grid(
+                row=7, column=1, sticky="w")
+            row = 8
+        self.preview = ttk.Treeview(frm, columns=("new", "info"), height=8 if not self.single
+                                    else 1, selectmode="none")
+        self.preview.heading("#0", text="Bisher")
+        self.preview.heading("new", text="Neu")
+        self.preview.heading("info", text="")
+        for col, w in (("#0", 260), ("new", 260), ("info", 220)):
+            self.preview.column(col, width=int(w * app.scale))
+        self.preview.tag_configure("err", foreground="#d64545")
+        self.preview.tag_configure("same", foreground=app.palette["muted"])
+        if not self.single:
+            self.preview.grid(row=row, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+            frm.rowconfigure(row, weight=1)
+        ttk.Label(frm, textvariable=self.info, style="Hint.TLabel").grid(
+            row=row + 1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        btns = ttk.Frame(frm)
+        btns.grid(row=row + 2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Abbrechen", command=self.destroy).pack(side=tk.RIGHT)
+        self.ok_btn = ttk.Button(btns, text="Umbenennen", command=self._apply)
+        self.ok_btn.pack(side=tk.RIGHT, padx=6)
+        for var in (self.find, self.repl, self.template, self.start):
+            var.trace_add("write", lambda *_: self._refresh())
+        self.bind("<Return>", lambda e: self._apply())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._refresh()
+        _center(self, app.root, 90)
+        self.grab_set()
+
+    def _plans(self):
+        r = self.r
+        items = [(row.path, row.is_dir, row.modified) for row in self.rows]
+        try:
+            start = int(self.start.get() or 1)
+        except ValueError:
+            start = 1
+        if self.single:  # literal new name, no placeholders
+            folder = os.path.dirname(self.rows[0].path)
+            new = self.template.get().strip()
+            plans = [r.RenamePlan(self.rows[0].path, os.path.join(folder, new),
+                                  r.name_problem(new))]
+            r._mark_conflicts(plans)
+            return plans
+        return r.plan(items, self.mode.get(), find=self.find.get(), replace=self.repl.get(),
+                      regex=self.regex.get(), case=self.case.get(),
+                      template=self.template.get(), start=start)
+
+    def _refresh(self):
+        plans = self._plans()
+        self.preview.delete(*self.preview.get_children())
+        for i, p in enumerate(plans[:500]):
+            tag = "err" if p.error else ("same" if not p.changed else "")
+            self.preview.insert("", tk.END, iid=str(i), text=os.path.basename(p.old),
+                                values=(os.path.basename(p.new), p.error), tags=(tag,))
+        ok = [p for p in plans if p.changed and not p.error]
+        bad = [p for p in plans if p.error]
+        if self.single:
+            self.info.set(bad[0].error if bad else "")
+        else:
+            self.info.set(f"{len(ok)} werden umbenannt" + (f" · {len(bad)} mit Problem: "
+                                                          f"{bad[0].error}" if bad else ""))
+        self.ok_btn.state(["!disabled"] if ok else ["disabled"])
+
+    def _apply(self):
+        plans = self._plans()
+        if not any(p.changed and not p.error for p in plans):
+            return
+        done, errors = self.r.execute(plans)
+        self.app.after_rename(done, errors)
+        self.destroy()

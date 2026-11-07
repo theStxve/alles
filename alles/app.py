@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import csv
 import ctypes
+import dataclasses
 import json
 import logging
 import logging.handlers
@@ -436,6 +437,7 @@ class AllesApp:
             self._menus.append(sub)
             c.add_cascade(label=label, menu=sub)
         c.add_separator()
+        c.add_command(label="Umbenennen", accelerator="F2", command=self.rename_selected)
         c.add_command(label="In diesem Ordner suchen", command=self.search_in_folder)
         c.add_command(label="Eigenschaften", accelerator="Alt+Enter",
                       command=self.properties_selected)
@@ -465,6 +467,8 @@ class AllesApp:
         t.bind("<Control-C>", lambda ev: self.copy_names())
         t.bind("<Control-t>", lambda ev: self.terminal_here())
         t.bind("<Delete>", lambda ev: self.recycle_selected())
+        t.bind("<F2>", lambda ev: self.rename_selected())
+        t.bind("<Control-z>", lambda ev: self.undo_rename())
         t.bind("<Control-a>", lambda ev: (t.selection_set(t.get_children()), "break")[1])
         t.bind("<Escape>", lambda ev: self.focus_search())
         t.bind("<Up>", self._on_tree_up)
@@ -1040,6 +1044,43 @@ class AllesApp:
                 self.tree.delete(iid)
         self.set_status(f"{what} in den Papierkorb verschoben." if ok else
                         "Nicht alles konnte verschoben werden.", "ok" if ok else "err")
+
+    # -- rename (F2)
+    def rename_selected(self):
+        rows = self.selected_rows()
+        if rows:
+            from .dialogs import RenameDialog
+            RenameDialog(self, rows)
+
+    def after_rename(self, done, errors):
+        if done:
+            self._last_rename = done
+            mapping = {os.path.normcase(old): new for old, new in done}
+            for iid in self.tree.get_children():
+                row = self._rows[int(iid)]
+                new = mapping.get(os.path.normcase(row.path))
+                if new:
+                    name = os.path.basename(new)
+                    ext = "" if row.is_dir else os.path.splitext(name)[1].lstrip(".").lower()
+                    self._rows[int(iid)] = dataclasses.replace(row, path=new, name=name, ext=ext)
+                    self.tree.item(iid, text=" " + name)
+        if errors:
+            messagebox.showwarning("Umbenennen", "Nicht alles konnte umbenannt werden:\n\n"
+                                   + "\n".join(errors[:15]), parent=self.root)
+        if done:
+            self.set_status(f"{len(done)} Element(e) umbenannt – Strg+Z macht es rückgängig.",
+                            "ok")
+
+    def undo_rename(self):
+        done = getattr(self, "_last_rename", None)
+        if not done:
+            return
+        from . import rename
+        errors = rename.undo(done)
+        self._last_rename = None
+        self.after_rename([(new, old) for old, new in done], errors)
+        self._last_rename = None
+        self.set_status("Umbenennen rückgängig gemacht.", "ok" if not errors else "warn")
 
     # -- copy / move with the native Windows dialog
     def _fill_target_menu(self, menu: tk.Menu, op: str):
