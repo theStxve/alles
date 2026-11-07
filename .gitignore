@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build
+build/
+dist/
+*.spec.bak
+version_info.txt
+
+# Everything SDK binaries (download with: python scripts/fetch_sdk.py)
+Everything*.dll
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.claude/

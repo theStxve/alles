@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alles"
+dynamic = ["version"]
+description = "Ein freundliches Windows-Front-End für Everything (voidtools)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "theStxve" }]
+keywords = ["everything", "voidtools", "search", "windows", "tkinter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Topic :: Desktop Environment :: File Managers",
+    "Natural Language :: German",
+]
+dependencies = []
+
+[project.optional-dependencies]
+extras = ["psutil>=5.9"]
+dev = ["pytest>=8", "ruff>=0.6", "pyinstaller>=6", "Pillow>=10"]
+
+[project.urls]
+Homepage = "https://github.com/theStxve/alles"
+Issues = "https://github.com/theStxve/alles/issues"
+
+[project.gui-scripts]
+alles = "alles.app:main"
+
+[tool.setuptools]
+packages = ["alles"]
+
+[tool.setuptools.dynamic]
+version = { attr = "alles.__version__" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "SIM", "BLE"]
+ignore = ["SIM105", "SIM108"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
