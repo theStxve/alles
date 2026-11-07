@@ -35,16 +35,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
-      - name: Fetch Everything SDK
-        run: python scripts/fetch_sdk.py
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          choco install innosetup --no-progress -y
       - name: SDK smoke test
-        run: python -c "from alles import everything_sdk as es; print(es.EverythingSDK().get_version())"
-      - name: Build exe
-        run: python -m PyInstaller ALLES.spec --noconfirm --clean
+        run: |
+          python scripts/fetch_sdk.py
+          python -c "from alles import everything_sdk as es; print(es.EverythingSDK().get_version())"
+      - name: Build exe, installer and portable zip
+        shell: pwsh
+        run: ./scripts/build.ps1
+      - name: Installer smoke test (install + uninstall)
+        shell: pwsh
+        run: ./scripts/test_installer.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: ALLES-exe
-          path: dist/ALLES.exe
+          name: ALLES-build
+          path: |
+            dist/ALLES.exe
+            dist/ALLES-Setup-*.exe
+            dist/ALLES-*-portable.zip
           retention-days: 14

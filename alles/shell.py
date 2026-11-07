@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
 from ctypes import wintypes
@@ -63,7 +64,10 @@ def launch_command(tray: bool = True) -> str:
         pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
         if os.path.isfile(pyw):
             exe = pyw
-        cmd = f'"{exe}" -m alles'
+        # absolute script path: Explorer/autostart launch us from another folder
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "run_alles.py")
+        cmd = f'"{exe}" "{script}"' if os.path.isfile(script) else f'"{exe}" -m alles'
     return cmd + (" --tray" if tray else "")
 
 
@@ -115,3 +119,129 @@ def logical_drives() -> list[str]:
     if not n:
         return []
     return [d for d in ctypes.wstring_at(buf, n).split("\x00") if d]
+
+
+DRIVE_REMOVABLE, DRIVE_FIXED = 2, 3
+
+
+def drive_type(root: str) -> int:
+    return ctypes.windll.kernel32.GetDriveTypeW(root)
+
+
+def fixed_drives() -> list[str]:
+    """Local hard disks - the default roots for the built-in index."""
+    return [d for d in logical_drives() if drive_type(d) == DRIVE_FIXED]
+
+
+# ----------------------------------------------------------------------------- file ops
+class SHFILEOPSTRUCTW(ctypes.Structure):
+    _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT),
+                ("pFrom", ctypes.c_void_p), ("pTo", ctypes.c_void_p),
+                ("fFlags", wintypes.WORD), ("fAnyOperationsAborted", wintypes.BOOL),
+                ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+
+FO_DELETE = 3
+FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 0x4, 0x10, 0x40, 0x400
+FOF_WANTNUKEWARNING = 0x4000
+
+
+def recycle(paths: list[str], hwnd: int | None = None) -> bool:
+    """Move files/folders to the recycle bin. Returns False if anything failed.
+
+    On drives without a recycle bin (USB sticks, network shares) Windows asks
+    before deleting permanently (FOF_WANTNUKEWARNING) instead of silently nuking.
+    """
+    if not paths:
+        return True
+    buf = ctypes.create_unicode_buffer("\0".join(os.path.normpath(p) for p in paths) + "\0\0")
+    op = SHFILEOPSTRUCTW()
+    op.hwnd = hwnd
+    op.wFunc = FO_DELETE
+    op.pFrom = ctypes.cast(buf, ctypes.c_void_p)
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_WANTNUKEWARNING
+    shell32 = ctypes.WinDLL("shell32")
+    shell32.SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
+    rc = shell32.SHFileOperationW(ctypes.byref(op))
+    return rc == 0 and not op.fAnyOperationsAborted
+
+
+def open_with(path: str) -> None:
+    """Windows 'Open with...' dialog."""
+    subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", os.path.normpath(path)])
+
+
+def open_terminal(folder: str) -> None:
+    """Windows Terminal if installed, otherwise PowerShell, in the given folder."""
+    folder = os.path.normpath(folder)
+    wt = shutil.which("wt.exe")
+    if wt:
+        subprocess.Popen([wt, "-d", folder])
+    else:
+        subprocess.Popen(["powershell.exe", "-NoExit"], cwd=folder,
+                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+
+def vscode_path() -> str | None:
+    return shutil.which("code.cmd") or shutil.which("code")
+
+
+def open_in_vscode(path: str) -> None:
+    code = vscode_path()
+    if not code:
+        raise FileNotFoundError("Visual Studio Code (code) wurde nicht gefunden.")
+    subprocess.Popen([code, os.path.normpath(path)], creationflags=0x08000000)  # no window
+
+
+# ----------------------------------------------------------------------------- Explorer menu
+EXPLORER_KEYS = (r"Software\Classes\Directory\shell\ALLES",
+                 r"Software\Classes\Directory\Background\shell\ALLES",
+                 r"Software\Classes\Drive\shell\ALLES")
+EXPLORER_LABEL = "Mit ALLES durchsuchen"
+
+
+def app_command() -> str:
+    return launch_command(tray=False)
+
+
+def get_explorer_integration() -> bool:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, EXPLORER_KEYS[0]):
+            return True
+    except (ImportError, OSError):
+        return False
+
+
+def set_explorer_integration(enabled: bool, icon: str | None = None) -> bool:
+    """Adds/removes 'Mit ALLES durchsuchen' to the folder context menu (per user)."""
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        for key in EXPLORER_KEYS:
+            if enabled:
+                arg = "%V"
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as k:
+                    winreg.SetValueEx(k, "", 0, winreg.REG_SZ, EXPLORER_LABEL)
+                    winreg.SetValueEx(k, "Icon", 0, winreg.REG_SZ,
+                                      icon or app_command().split('"')[1])
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key + r"\command") as k:
+                    winreg.SetValueEx(k, "", 0, winreg.REG_SZ,
+                                      f'{app_command()} --folder "{arg}"')
+            else:
+                for sub in (key + r"\command", key):
+                    try:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
+                    except FileNotFoundError:
+                        pass
+        return True
+    except OSError:
+        return False
+
+
+def remove_integrations() -> None:
+    """Used by the uninstaller: autostart + Explorer menu."""
+    set_autostart(False)
+    set_explorer_integration(False)

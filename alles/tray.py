@@ -25,6 +25,8 @@ WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_CONTEXTMENU = 0x007B
 WM_HOTKEY = 0x0312
+WM_COPYDATA = 0x004A
+COPYDATA_MAGIC = 0xA11E5
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
@@ -44,6 +46,11 @@ ASFW_ANY = 0xFFFFFFFF
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
                              wintypes.WPARAM, wintypes.LPARAM)
+
+
+class COPYDATASTRUCT(ctypes.Structure):
+    _fields_ = [("dwData", ctypes.c_size_t), ("cbData", wintypes.DWORD),
+                ("lpData", ctypes.c_void_p)]
 
 
 class WNDCLASSW(ctypes.Structure):
@@ -110,6 +117,8 @@ def _load_libs():
     proto(user32, "GetWindowThreadProcessId", [H, ctypes.POINTER(wintypes.DWORD)],
           wintypes.DWORD)
     proto(user32, "AllowSetForegroundWindow", [wintypes.DWORD], wintypes.BOOL)
+    proto(user32, "SendMessageTimeoutW", [H, U, wintypes.WPARAM, P, U, U,
+                                          ctypes.POINTER(ctypes.c_size_t)], LRESULT)
     proto(kernel32, "GetModuleHandleW", [wintypes.LPCWSTR], wintypes.HMODULE)
     proto(shell32, "Shell_NotifyIconW", [wintypes.DWORD, ctypes.POINTER(NOTIFYICONDATAW)],
           wintypes.BOOL)
@@ -119,8 +128,9 @@ def _load_libs():
 user32, kernel32, shell32 = _load_libs()
 
 
-def signal_existing_instance() -> bool:
-    """If another ALLES is running, ask it to show its window. Returns True if found."""
+def signal_existing_instance(payload: str | None = None) -> bool:
+    """If another ALLES is running, activate it (optionally passing a JSON payload
+    such as {"folder": ...}). Returns True if an instance was found."""
     hwnd = user32.FindWindowW(WINDOW_CLASS, None)
     if not hwnd:
         return False
@@ -128,7 +138,15 @@ def signal_existing_instance() -> bool:
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     if pid.value:
         user32.AllowSetForegroundWindow(pid.value)  # let it take the foreground
-    user32.PostMessageW(hwnd, WM_APP_SHOW, 0, 0)
+    if payload:
+        data = payload.encode("utf-8")
+        buf = ctypes.create_string_buffer(data, len(data))
+        cds = COPYDATASTRUCT(COPYDATA_MAGIC, len(data), ctypes.cast(buf, ctypes.c_void_p))
+        result = ctypes.c_size_t()
+        user32.SendMessageTimeoutW(hwnd, WM_COPYDATA, 0, ctypes.byref(cds),
+                                   0x0002, 3000, ctypes.byref(result))  # SMTO_ABORTIFHUNG
+    else:
+        user32.PostMessageW(hwnd, WM_APP_SHOW, 0, 0)
     return True
 
 
@@ -142,12 +160,13 @@ class TrayHotkey:
 
     def __init__(self, dispatch, on_toggle, on_show, on_quit,
                  on_hotkey_changed=None, preferred_combo=None, icon_path=None,
-                 tooltip="ALLES"):
+                 tooltip="ALLES", on_message=None):
         self.dispatch = dispatch
         self.on_toggle = on_toggle
         self.on_show = on_show
         self.on_quit = on_quit
         self.on_hotkey_changed = on_hotkey_changed
+        self.on_message = on_message
         self.preferred_combo = tuple(preferred_combo) if preferred_combo else None
         self.icon_path = icon_path
         self.tooltip = tooltip[:127]
@@ -274,6 +293,13 @@ class TrayHotkey:
                     self.dispatch(self.on_show)
                 elif event in (WM_RBUTTONUP, WM_CONTEXTMENU):
                     self._show_menu()
+                return 0
+            if msg == WM_COPYDATA and lparam:
+                cds = ctypes.cast(lparam, ctypes.POINTER(COPYDATASTRUCT)).contents
+                if cds.dwData == COPYDATA_MAGIC and 0 < cds.cbData < 65536:
+                    text = ctypes.string_at(cds.lpData, cds.cbData).decode("utf-8", "replace")
+                    self.dispatch(self.on_message or (lambda _t: self.on_show()), text)
+                    return 1
                 return 0
             if msg == WM_APP_SHOW:
                 self.dispatch(self.on_show)

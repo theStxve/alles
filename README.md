@@ -1,125 +1,240 @@
-# ALLES – Everything, aber verständlich
+<div align="center">
 
+<img src="assets/logo.png" width="128" alt="ALLES Logo">
+
+# ALLES
+
+**Blitzschnelle Dateisuche für Windows – mit [Everything](https://www.voidtools.com) oder ganz ohne.**
+
+[![Release](https://img.shields.io/github/v/release/theStxve/alles?label=Download&color=6366f1)](https://github.com/theStxve/alles/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/theStxve/alles/total?color=06b6d4)](https://github.com/theStxve/alles/releases)
 [![CI](https://github.com/theStxve/alles/actions/workflows/ci.yml/badge.svg)](https://github.com/theStxve/alles/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4)
-![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)
+[![License: MIT](https://img.shields.io/badge/Lizenz-MIT-blue.svg)](LICENSE)
+<br>
+![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)
+![Keine Abhängigkeiten](https://img.shields.io/badge/Abh%C3%A4ngigkeiten-keine-success)
 
-**ALLES** ist eine aufgeräumte Windows-Oberfläche für die blitzschnelle Dateisuche
-[Everything](https://www.voidtools.com) von voidtools.
+[**Download**](https://github.com/theStxve/alles/releases/latest) ·
+[Funktionen](#funktionen) ·
+[Installation](#installation) ·
+[Tastenkürzel](#tastenkuerzel) ·
+[FAQ](#faq)
 
-Die Ergebnisse kommen direkt aus deinem laufenden Everything über das offizielle SDK.
-Es wird nichts nachgebaut oder geschätzt. ALLES nimmt dir nur die Suchsyntax ab:
-Du klickst Filter an, ALLES schreibt die passende Everything-Abfrage und zeigt sie dir an.
-So lernst du die Syntax nebenbei.
+<img src="docs/images/screenshot-light.png" alt="ALLES Hauptfenster mit Suchergebnissen und Bildvorschau" width="900">
 
-## Funktionen
+</div>
 
-- **Live-Suche beim Tippen** – stellt man die Suche um, werden veraltete Abfragen verworfen
-- **Filter per Klick** für Typ (Dokumente, Bilder, Videos, Code …), Größe und Änderungsdatum
-- **Laufwerke gezielt auswählen** (mit Laufwerksnamen) statt „alles oder nichts“
-- **Generierte Everything-Syntax** sichtbar und kopierbar, auch direkt in Everything öffnen
-- **Sortieren** per Klick auf die Spaltenköpfe
-- **Mehrfachauswahl**: öffnen, im Explorer zeigen, Eigenschaften, Pfade/Namen kopieren
-- **„In diesem Ordner suchen“** über das Kontextmenü
-- **CSV-Export** der Ergebnisse (Excel-kompatibel)
-- **Suchverlauf** (Alt+↓)
-- **Tray-Icon + globaler Hotkey** (Standard: `Strg+Alt+Leertaste`), frei belegbar
-- **Selbstheilung**: Läuft Everything nicht (z. B. nur als Dienst), startet ALLES es im Hintergrund
-- **Diagnose**: zeigt, welche Laufwerke *nicht* im Everything-Index sind (typisch: exFAT/FAT/Netz)
-- **Autostart mit Windows** (optional), Fensterposition, Spalten und Filter bleiben gespeichert
-- Scharfe Darstellung auf HiDPI-Bildschirmen, **keine Abhängigkeiten** außer Python selbst
+---
 
-## Installation
+## Warum ALLES?
 
-### Variante A: fertige EXE
+*Everything* von voidtools ist die schnellste Dateisuche für Windows. Viele scheitern aber an
+der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur klicken statt
+`ext:pdf;docx dm:lastweek size:>1mb` zu tippen.
 
-1. [Everything](https://www.voidtools.com/downloads/) installieren und starten
-2. `ALLES-vX.Y.Z.exe` aus den [Releases](https://github.com/theStxve/alles/releases) laden und starten
+**ALLES** legt eine aufgeräumte Oberfläche darüber:
 
-> Windows SmartScreen kann bei unsignierten EXE-Dateien warnen („Weitere Informationen“ →
-> „Trotzdem ausführen“). Die SHA-256-Prüfsumme liegt jedem Release bei.
+- Du **klickst Filter an**, ALLES schreibt die passende Suchsyntax und zeigt sie dir an. So lernst du sie nebenbei.
+- Mit dem **eigenen Index** funktioniert ALLES auch **komplett ohne Everything**. Der Index liest
+  sogar Laufwerke, die Everything nicht automatisch erfasst (exFAT, USB, Netzlaufwerke).
+- **Vorschau, Duplikat-Finder, Dark Mode, Explorer-Integration**: alles in einer kleinen, portablen EXE.
 
-### Variante B: aus dem Quellcode
+<a id="funktionen"></a>
+
+## ✨ Funktionen
+
+| | |
+|---|---|
+| 🔎 **Live-Suche** | Ergebnisse beim Tippen, veraltete Anfragen werden abgebrochen |
+| 🧭 **Zwei Suchmodi** | Everything (voidtools) **oder** eigener Index, wahlweise automatisch |
+| 🎛️ **Filter per Klick** | Typ, Größe, Datum, Laufwerke, Sortierung, Groß/Klein, Regex, Pfadsuche |
+| ⭐ **Filter-Presets** | Eingebaute Vorlagen, eigene Filterkombinationen speicherbar |
+| 🖼️ **Vorschau** | Explorer-Thumbnails für Bilder/Videos/PDFs, Textinhalt für Code und Notizen |
+| 🧹 **Duplikat-Finder** | Nach Inhalt (Hash) oder Name+Größe, ältere Kopien mit einem Klick in den Papierkorb |
+| 🚫 **Ordner ausschließen** | `node_modules`, `.git`, `WinSxS` & Co. bleiben draußen, frei einstellbar |
+| 🌙 **Dark Mode** | Folgt Windows oder fest hell/dunkel, inklusive dunkler Titelleiste |
+| 📂 **Explorer-Integration** | Rechtsklick auf einen Ordner → *Mit ALLES durchsuchen* |
+| ⌨️ **Globaler Hotkey** | `Strg+Alt+Leertaste` holt ALLES von überall nach vorn (frei belegbar) |
+| 🗂️ **Echte Datei-Icons** | Icons und Typnamen direkt aus Windows |
+| 🗑️ **Dateiaktionen** | Öffnen, Öffnen mit…, Explorer, Terminal, VS Code, Eigenschaften, Papierkorb |
+| 📤 **CSV-Export** | Ergebnislisten Excel-kompatibel exportieren |
+| 🩺 **Diagnose & Selbstheilung** | Zeigt nicht indizierte Laufwerke und startet Everything bei Bedarf neu |
+| 💼 **Portabel** | Ein `ALLES-Daten`-Ordner neben der EXE: alles bleibt auf dem USB-Stick |
+
+### Zwei Suchmodi
+
+| | Everything | Eigener Index |
+|---|---|---|
+| Voraussetzung | Everything installiert und gestartet | keine |
+| Erster Start | sofort | einmaliges Einlesen (ca. 1 Min. pro 1–2 Mio. Dateien) |
+| Suchgeschwindigkeit | ⚡ < 50 ms | ⚡ 10–200 ms |
+| Laufwerke | NTFS automatisch, andere manuell | alles, was du auswählst (auch exFAT, USB, Netzwerk) |
+| Aktualisierung | live (NTFS-Journal) | live (Ordnerüberwachung) und beim Start |
+| Adminrechte | nein | nein |
+
+Im Modus **Automatisch** (Standard) nutzt ALLES Everything, wenn es installiert ist, und sonst den eigenen Index.
+
+<div align="center">
+<img src="docs/images/screenshot-dark.png" alt="Dark Mode mit Code-Vorschau" width="49%">
+<img src="docs/images/screenshot-duplicates.png" alt="Duplikat-Finder" width="49%">
+</div>
+
+<a id="installation"></a>
+
+## 📦 Installation
+
+### Installer (empfohlen)
+
+[**ALLES-Setup-x.y.z.exe**](https://github.com/theStxve/alles/releases/latest) herunterladen und
+starten. Der Installer braucht **keine Adminrechte**. Er legt einen Startmenü-Eintrag an und
+fragt optional nach Desktop-Icon, Autostart und Explorer-Kontextmenü. Deinstallieren lässt sich
+ALLES ganz normal über *Einstellungen → Apps*.
+
+### Portabel
+
+`ALLES-x.y.z-portable.zip` entpacken und `ALLES.exe` starten. Der mitgelieferte Ordner
+`ALLES-Daten` sorgt dafür, dass Einstellungen und Index dort landen und nicht im Benutzerprofil.
+
+### Aus dem Quellcode
 
 ```powershell
 git clone https://github.com/theStxve/alles.git
 cd alles
-python scripts/fetch_sdk.py     # lädt Everything64.dll vom offiziellen voidtools-SDK
-python -m alles                 # oder: pythonw run_alles.py (ohne Konsolenfenster)
+python scripts/fetch_sdk.py   # optional: Everything-SDK für den Everything-Modus
+python run_alles.py           # oder: pythonw run_alles.py (ohne Konsole)
 ```
 
-Voraussetzung: Python 3.10+ (mit tkinter, ist im Standard-Installer enthalten).
-Optional: `pip install psutil` für die Prozess-Suche nach Everything.exe.
+Voraussetzung: Python 3.10+ mit tkinter (im offiziellen Installer enthalten). Es gibt **keine**
+weiteren Abhängigkeiten.
 
-### Kommandozeile
+> **SmartScreen:** Die EXE ist (noch) nicht signiert. Windows kann deshalb warnen: *Weitere
+> Informationen → Trotzdem ausführen*. Jedem Release liegen SHA-256-Prüfsummen bei.
 
-```text
-alles [--tray] [--search TEXT] [--version]
-  --tray     versteckt im Tray starten (für den Autostart)
-  --search   direkt mit diesem Suchbegriff starten
-```
+<a id="tastenkuerzel"></a>
 
-## Tastenkürzel
+## ⌨️ Tastenkürzel
 
 | Taste | Aktion |
 |---|---|
 | `Strg+Alt+Leertaste` | Fenster ein-/ausblenden (global, änderbar) |
 | `Strg+F` / `Strg+L` | Suchfeld fokussieren |
 | `↓` / `↑` | Zwischen Suchfeld und Ergebnissen wechseln |
-| `Enter` / `Strg+Enter` / `Alt+Enter` | Öffnen / Im Explorer zeigen / Eigenschaften |
-| `Strg+C` / `Strg+Umschalt+C` | Pfade / Namen kopieren |
-| `F5` | Suche wiederholen |
+| `Enter` · `Strg+Enter` · `Alt+Enter` | Öffnen · Im Explorer zeigen · Eigenschaften |
+| `Strg+T` | Terminal im Ordner öffnen |
+| `Entf` | In den Papierkorb |
+| `Strg+C` · `Strg+Umschalt+C` | Pfade · Namen kopieren |
+| `Strg+P` | Vorschau ein/aus |
 | `Strg+S` | Als CSV exportieren |
-| `Esc` | Suche leeren, beim zweiten Mal in den Tray |
+| `F5` · `Esc` · `Strg+Q` | Neu suchen · Leeren/in den Tray · Beenden |
 
-## Häufige Probleme
+## 🔤 Suchsyntax
 
-**„Everything läuft nicht (oder nur als Dienst)“**
+Die Filter erzeugen die Syntax automatisch. Du kannst sie aber auch direkt tippen, und sie
+funktioniert in **beiden** Suchmodi:
+
+| Syntax | Bedeutung | Beispiel |
+|---|---|---|
+| Leerzeichen | UND | `rechnung 2026` |
+| `\|` | ODER | `jpg \| png` |
+| `!` | NICHT | `bericht !entwurf` |
+| `< >` | Gruppe | `<jpg \| png> urlaub` |
+| `" "` | genaue Phrase | `"mein ordner"` |
+| `*` `?` | Platzhalter | `*.pdf` · `scan_??.jpg` |
+| `\` | im Pfad suchen | `\projekte\ angebot` |
+| `ext:` | Dateiendung | `ext:pdf;docx` |
+| `size:` | Größe | `size:>100mb` · `size:1mb..5mb` |
+| `dm:` | Änderungsdatum | `dm:today` · `dm:lastweek` · `dm:2025` |
+| `file:` · `folder:` | nur Dateien/Ordner | `folder:backup` |
+| `parent:` | direkt in Ordner | `parent:C:\Users` |
+| `regex:` | regulärer Ausdruck | `regex:^IMG_\d+\.jpg$` |
+
+<a id="faq"></a>
+
+## ❓ Häufige Fragen
+
+<details>
+<summary><b>„Everything läuft nicht (oder nur als Dienst)“</b></summary>
+
 Der Everything-*Dienst* allein beantwortet keine Suchanfragen, dafür muss `Everything.exe`
-laufen. ALLES startet es automatisch im Hintergrund. Klappt das nicht, den Pfad unter
-*Extras → Einstellungen* angeben.
+laufen. ALLES startet es automatisch im Hintergrund. Klappt das nicht, gib den Pfad unter
+*Werkzeuge → Einstellungen → Everything* an, oder wechsle zum eigenen Index.
+</details>
 
-**Ein Laufwerk liefert keine Treffer**
-*Everything → Diagnose* ausführen. FAT/exFAT- und Netzlaufwerke indiziert Everything nicht
-automatisch. Du musst sie in Everything unter *Extras → Optionen → Indizes → Ordner* hinzufügen.
+<details>
+<summary><b>Ein Laufwerk liefert keine Treffer</b></summary>
 
-**Wo liegen Einstellungen und Log?**
-`%APPDATA%\ALLES\config.json` und `%APPDATA%\ALLES\alles.log`
+*Werkzeuge → Diagnose* zeigt, welche Laufwerke nicht im Index sind. Everything indiziert
+FAT/exFAT- und Netzlaufwerke nicht automatisch. Du kannst sie in Everything als Ordner-Index
+hinzufügen oder den **eigenen Index** nutzen und das Laufwerk unter *Einstellungen → Eigener
+Index* auswählen.
+</details>
 
-## Entwicklung
+<details>
+<summary><b>Wie aktuell ist der eigene Index?</b></summary>
+
+Änderungen werden live über die Windows-Ordnerüberwachung übernommen, neue Dateien sind also
+nach etwa einer Sekunde findbar. Was passiert, während ALLES nicht läuft, holt ein
+Hintergrund-Abgleich beim nächsten Start nach (einstellbar). Während des Abgleichs bleibt der
+alte Index durchsuchbar.
+</details>
+
+<details>
+<summary><b>Wo liegen Einstellungen, Index und Log?</b></summary>
+
+- Einstellungen und Log: `%APPDATA%\ALLES\`
+- Suchindex: `%LOCALAPPDATA%\ALLES\index.db`
+- Im portablen Modus liegt alles im Ordner `ALLES-Daten` neben der EXE.
+</details>
+
+<details>
+<summary><b>Ist ALLES ein offizielles voidtools-Produkt?</b></summary>
+
+Nein. ALLES ist ein unabhängiges Open-Source-Projekt und nutzt Everything über dessen
+offizielles SDK. Everything selbst ist nicht Teil dieses Projekts.
+</details>
+
+## 🛠️ Entwicklung
 
 ```powershell
 pip install -e ".[dev]"
 python -m ruff check .
-python -m pytest
-python scripts/fetch_sdk.py ; python -m PyInstaller ALLES.spec   # -> dist/ALLES.exe
+python -m pytest                           # ~100 Tests
+powershell -File scripts\build.ps1         # EXE, portable ZIP und (mit Inno Setup) Installer
 ```
 
-Projektstruktur:
-
-```text
-alles/
-  app.py            Oberfläche (tkinter), Such-Worker, Einstellungen
-  query.py          UI-Auswahl -> Everything-Syntax (reines Python, voll getestet)
-  everything_sdk.py ctypes-Wrapper um Everything64.dll
-  tray.py           Tray-Icon, globaler Hotkey, Single-Instance (reines ctypes)
-  shell.py          Öffnen, Explorer, Eigenschaften, Autostart, Laufwerke
-  locate.py         Everything.exe finden (Registry, Dienst, Standardpfade)
-  config.py, util.py, win_style.py
-tests/              pytest
-scripts/            fetch_sdk.py, make_icon.py
+```mermaid
+flowchart LR
+    UI["app.py<br/>Oberfläche"] -->|Query| Q["query.py<br/>Filter → Syntax"]
+    UI --> B{Backend}
+    B -->|SDK / IPC| E["everything_sdk.py<br/>Everything64.dll"]
+    B -->|SQL| I["index/<br/>syntax → SQLite"]
+    W["index/watcher.py<br/>ReadDirectoryChangesW"] --> I
+    UI --> P["preview.py · thumbs.py<br/>Shell-Thumbnails"]
+    UI --> T["tray.py<br/>Tray · Hotkey · IPC"]
 ```
 
-Einen Release baust du, indem du die Version in `alles/__init__.py` erhöhst und dann einen Tag
-pushst (`git tag v2.0.1 && git push --tags`). GitHub Actions baut die EXE und hängt sie an.
+| Modul | Aufgabe |
+|---|---|
+| `alles/app.py` | Hauptfenster, Such-Worker, Status, Presets |
+| `alles/query.py` | UI-Auswahl → Everything-Syntax |
+| `alles/backends.py` | Gemeinsame Schnittstelle für Everything und eigenen Index |
+| `alles/index/` | Syntax-Parser → SQL, SQLite-Speicher, Scanner, Live-Überwachung |
+| `alles/preview.py`, `thumbs.py` | Vorschau, Explorer-Thumbnails und Icons (reines ctypes) |
+| `alles/tray.py` | Tray-Icon, globaler Hotkey, Single-Instance und Instanz-Kommunikation |
+| `alles/shell.py` | Explorer, Papierkorb, Terminal, Autostart, Kontextmenü |
+| `alles/dialogs.py` | Einstellungen, Duplikat-Finder |
+| `installer/alles.iss` | Inno-Setup-Installer |
 
-Ideen für die Zukunft: [docs/FEATURE_IDEAS.md](docs/FEATURE_IDEAS.md)
+**Release:** Version in `alles/__init__.py` erhöhen, dann
+`git tag v2.1.0 && git push --tags`. GitHub Actions testet und baut EXE, Installer und portable
+ZIP, prüft den Installer per Test-Installation und hängt alles an das Release.
 
-## Lizenz
+Ideen und Roadmap: [docs/FEATURE_IDEAS.md](docs/FEATURE_IDEAS.md) · Änderungen: [CHANGELOG.md](CHANGELOG.md)
+
+## 📄 Lizenz
 
 [MIT](LICENSE) © theStxve
 
 „Everything“ und das Everything-SDK sind Produkte von [voidtools](https://www.voidtools.com).
-Sie sind nicht Teil dieses Repositories. ALLES ist ein inoffizielles Projekt und nicht mit
-voidtools verbunden.
+Sie sind nicht Teil dieses Repositories. ALLES ist mit voidtools nicht verbunden.

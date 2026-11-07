@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alles"
 dynamic = ["version"]
-description = "Ein freundliches Windows-Front-End für Everything (voidtools)"
+description = "Blitzschnelle Dateisuche für Windows – mit Everything oder eigenem Index"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

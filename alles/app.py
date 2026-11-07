@@ -1,15 +1,13 @@
 """
-ALLES - a friendlier GUI front-end for "Everything" (voidtools).
-
-It queries the live Everything instance through the official SDK, so results are
-100 % real Everything search - with a clearer interface and filters that build
-the correct search syntax for you.
+ALLES - a friendlier GUI front-end for "Everything" (voidtools) with an optional
+built-in index, so it also works completely without Everything.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import ctypes
+import json
 import logging
 import logging.handlers
 import os
@@ -21,15 +19,29 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 from dataclasses import dataclass
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import __version__, shell, win_style
+from . import __version__, shell, theme, win_style
 from . import config as cfgmod
-from . import everything_sdk as es
+from .backends import (
+    BACKEND_AUTO,
+    BACKEND_EVERYTHING,
+    BACKEND_INDEX,
+    EverythingBackend,
+    IndexBackend,
+    Row,
+    SearchError,
+    Status,
+)
+from .index.service import IndexService, IndexState
+from .index.store import IndexStore
 from .locate import find_everything_exe
+from .preview import PreviewPane
 from .query import (
+    BUILTIN_PRESETS,
     COLUMN_SORTS,
     DATE_PRESETS,
+    DEFAULT_EXCLUDES,
     DEFAULT_SORT,
     SIZE_PRESETS,
     SORT_OPTIONS,
@@ -38,56 +50,34 @@ from .query import (
     SearchOptions,
     build_query,
 )
-from .util import (
-    MOD_ALT,
-    MOD_CONTROL,
-    MOD_SHIFT,
-    MOD_WIN,
-    MODIFIER_VKS,
-    fmt_count,
-    fmt_date,
-    fmt_size,
-    geometry_visible,
-    is_valid_hotkey,
-    parse_geometry,
-    vk_display,
-)
+from .util import fmt_count, fmt_size, geometry_visible, parse_geometry, vk_display
 
-APP_TITLE = "ALLES - Everything Front-End"
+WINDOW_TITLE = "ALLES – Dateisuche"
 MUTEX_NAME = "Local\\ALLES_SingleInstance"
 log = logging.getLogger("alles")
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.GetForegroundWindow.restype = ctypes.c_void_p
 _user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
-_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
-_user32.GetAsyncKeyState.restype = ctypes.c_short
+_user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 
 STATUS_COLORS = {"ok": "#2e9d5b", "warn": "#d08a1e", "err": "#d64545", "info": "#8a8a8a"}
-COLUMNS = (("name", "Name", 280, tk.W), ("folder", "Ordner", 420, tk.W),
-           ("size", "Größe", 95, tk.E), ("modified", "Geändert", 135, tk.W),
-           ("type", "Typ", 70, tk.W))
-REQUEST_FLAGS = (es.REQUEST_FULL_PATH_AND_FILE_NAME | es.REQUEST_SIZE |
-                 es.REQUEST_DATE_MODIFIED | es.REQUEST_EXTENSION | es.REQUEST_ATTRIBUTES)
+COLUMNS = (("folder", "Ordner", 330, tk.W), ("size", "Größe", 85, tk.E),
+           ("modified", "Geändert", 125, tk.W), ("type", "Typ", 130, tk.W))
+NAME_COL_WIDTH = 270
 WATCHDOG_INTERVAL = 5.0
 AUTOSTART_COOLDOWN = 60.0
 CONFIRM_OPEN_MANY = 10
+LOCAL_DATA = cfgmod.DATA_DIR
 
 
-@dataclass(frozen=True)
-class Row:
-    path: str
-    name: str
-    folder: str
-    size: int | None
-    modified: object  # datetime | None
-    ext: str
-    is_dir: bool
-
-    def display(self):
-        kind = "Ordner" if self.is_dir else self.ext.lower()
-        size = "" if self.is_dir else fmt_size(self.size)
-        return (self.name, self.folder, size, fmt_date(self.modified), kind)
+def normalize_folder_arg(folder: str) -> str:
+    """Explorer passes drives as "C:\\" - the backslash escapes the closing quote, so
+    we receive 'C:"'. Strip stray quotes and give bare drive letters their root."""
+    folder = folder.strip().strip('"').strip()
+    if len(folder) == 2 and folder[1] == ":":
+        folder += "\\"
+    return folder
 
 
 @dataclass
@@ -105,8 +95,9 @@ def setup_logging() -> str:
     handler = logging.handlers.RotatingFileHandler(path, maxBytes=512_000, backupCount=2,
                                                    encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    log.addHandler(handler)
-    log.setLevel(logging.INFO)
+    root = logging.getLogger("alles")
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
     return path
 
 
@@ -115,31 +106,36 @@ class AllesApp:
                  initial_text: str = ""):
         self.root = root
         self.cfg = cfg
-        self.sdk: es.EverythingSDK | None = None
-        self.sdk_error: str | None = None
         self.tray = None
-        self._sdk_lock = threading.Lock()
+        self.icon_path = win_style.app_icon_path()
         self._ui_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._closing = False
         self._search_timer = None
+        self._preview_timer = None
         self._gen = 0
         self._req_cond = threading.Condition()
         self._pending: SearchRequest | None = None
         self._rows: list[Row] = []
-        self._total = 0
         self._last_query: Query | None = None
         self._last_start_attempt = 0.0
-        self._conn_state = None
+        self._status: Status | None = None
         self._status_tip = None
-        self._suspend_trace = False
+        self._icons: dict[tuple[str, bool], object] = {}
+        self._type_names: dict[tuple[str, bool], str] = {}
+        self._icon_png: dict[tuple[str, bool], tuple[bytes | None, str]] = {}
+        self._icon_lock = threading.Lock()
 
+        # settings
         self.max_display = cfgmod.clamp_int(cfg.get("max_display"), cfgmod.DEFAULT_MAX_DISPLAY,
                                             cfgmod.MIN_MAX_DISPLAY, cfgmod.MAX_MAX_DISPLAY)
         self.auto_repair = bool(cfg.get("auto_repair", True))
         self.close_to_tray = bool(cfg.get("close_to_tray", True))
         self.history: list[str] = [h for h in cfg.get("history", []) if isinstance(h, str)]
+        self.excludes: list[str] = list(cfg.get("excludes", DEFAULT_EXCLUDES))
+        self.index_roots: list[str] = list(cfg.get("index_roots") or shell.fixed_drives())
+        self.presets: dict[str, dict] = dict(cfg.get("presets") or {})
 
-        f = cfg.get("filters", {}) if isinstance(cfg.get("filters"), dict) else {}
+        f = cfg.get("filters") if isinstance(cfg.get("filters"), dict) else {}
 
         def pick(key, table, default):
             v = f.get(key)
@@ -155,26 +151,36 @@ class AllesApp:
         self.v_whole = tk.BooleanVar(value=bool(f.get("whole", False)))
         self.v_regex = tk.BooleanVar(value=bool(f.get("regex", False)))
         self.v_path = tk.BooleanVar(value=bool(f.get("path", False)))
+        self.v_preview = tk.BooleanVar(value=bool(cfg.get("preview", True)))
+        self.v_theme = tk.StringVar(value=cfg.get("theme", theme.THEME_SYSTEM))
         self.v_syntax = tk.StringVar()
-        self.v_status = tk.StringVar(value="Initialisiere...")
+        self.v_status = tk.StringVar(value="Initialisiere…")
+        self.v_mode = tk.StringVar()
         self._saved_drives = set(f.get("drives", []) or [])
         self.drive_vars: dict[str, tk.BooleanVar] = {}
 
-        root.title(APP_TITLE)
-        root.minsize(760, 420)
+        # backends
+        self.everything = EverythingBackend()
+        self.index = IndexBackend(IndexStore(os.path.join(LOCAL_DATA, "index.db")))
+        self.backend = None
+
+        root.title(WINDOW_TITLE)
+        root.minsize(820, 460)
+        self.scale = root.winfo_fpixels("1i") / 96.0
+        self._setup_fonts()
+        self.palette = theme.apply(root, self.v_theme.get())
         self._restore_geometry()
-        self._setup_style()
         self._build_menu()
         self._build_ui()
+        self._apply_palette()
         self._bind_keys()
         self._update_syntax()
-
         self.v_text.trace_add("write", lambda *_: self._on_filter_changed())
         root.report_callback_exception = self._report_exception
 
         threading.Thread(target=self._search_worker, name="search", daemon=True).start()
         self._pump()
-        self._init_sdk()
+        self._select_backend()
         threading.Thread(target=self._watchdog_loop, name="watchdog", daemon=True).start()
         if start_hidden:
             root.withdraw()
@@ -203,117 +209,153 @@ class AllesApp:
         log.error("Unhandled Tk exception", exc_info=(exc, val, tb))
         self.set_status(f"Interner Fehler: {val} (Details in alles.log)", "err")
 
-    # ------------------------------------------------------------------ style/UI
-    def _setup_style(self):
-        style = ttk.Style(self.root)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
+    # ------------------------------------------------------------------ fonts / theme
+    def _setup_fonts(self):
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
             try:
                 tkfont.nametofont(name).configure(family="Segoe UI", size=10)
             except tk.TclError:
                 pass
         base = tkfont.nametofont("TkDefaultFont")
-        self.font_bold = base.copy()
-        self.font_bold.configure(weight="bold")
         self.font_search = base.copy()
-        self.font_search.configure(size=12)
-        line = base.metrics("linespace")
-        style.configure("Treeview", rowheight=int(line * 1.45))
-        style.configure("Hint.TLabel", foreground="#6b6b6b")
-        self.scale = self.root.winfo_fpixels("1i") / 96.0
+        self.font_search.configure(size=13)
+        self.row_height = int(base.metrics("linespace") * 1.55)
 
+    def _apply_palette(self):
+        p = self.palette
+        ttk.Style(self.root).configure("Treeview", rowheight=self.row_height)
+        self.tree.tag_configure("dir", foreground=p["dir"])
+        self.status_dot.configure(bg=p["bg"])
+        self.preview.apply_palette(p)
+        for m in self._menus:
+            m.configure(bg=p["surface"], fg=p["fg"], activebackground=p["select"],
+                        activeforeground=p["select_fg"])
+
+    def set_theme(self, mode: str):
+        self.cfg["theme"] = mode
+        self.palette = theme.apply(self.root, mode)
+        self._apply_palette()
+
+    # ------------------------------------------------------------------ UI
     def _build_menu(self):
-        m = tk.Menu(self.root)
-        self.root.configure(menu=m)
+        """Own menu bar (ttk menubuttons) so it follows the dark theme."""
+        bar = ttk.Frame(self.root, padding=(6, 4, 6, 0))
+        bar.pack(fill=tk.X)
+        self._menus = []
 
-        file_m = tk.Menu(m, tearoff=0)
-        file_m.add_command(label="Ergebnisse als CSV exportieren...", accelerator="Strg+S",
-                           command=self.export_csv)
-        file_m.add_separator()
-        file_m.add_command(label="In den Tray minimieren", accelerator="Esc",
-                           command=self.hide_to_tray)
-        file_m.add_command(label="Beenden", accelerator="Strg+Q", command=self.quit)
-        m.add_cascade(label="Datei", menu=file_m)
+        def menu(label):
+            m = tk.Menu(self.root, tearoff=0)
+            mb = ttk.Menubutton(bar, text=label, menu=m, underline=0, style="Toolbutton")
+            mb.pack(side=tk.LEFT)
+            self.root.bind_all(f"<Alt-{label[0].lower()}>",
+                               lambda ev, b=mb: self._post_menubutton(b))
+            self._menus.append(m)
+            return m
 
-        ev_m = tk.Menu(m, tearoff=0)
-        ev_m.add_command(label="Everything starten", command=self.start_everything)
-        ev_m.add_command(label="Aktuelle Suche in Everything öffnen",
-                         command=self.open_in_everything)
-        ev_m.add_command(label="Diagnose (indizierte Laufwerke)", command=self.run_diagnose)
-        ev_m.add_separator()
-        ev_m.add_command(label="Laufwerksliste aktualisieren", command=self._rebuild_drives)
-        m.add_cascade(label="Everything", menu=ev_m)
+        m = menu("Datei")
+        m.add_command(label="Ergebnisse als CSV exportieren…", accelerator="Strg+S",
+                      command=self.export_csv)
+        m.add_separator()
+        m.add_command(label="In den Tray minimieren", accelerator="Esc",
+                      command=self.hide_to_tray)
+        m.add_command(label="Beenden", accelerator="Strg+Q", command=self.quit)
 
-        ex_m = tk.Menu(m, tearoff=0)
-        ex_m.add_command(label="Einstellungen...", accelerator="Strg+,",
-                         command=self.open_settings)
-        ex_m.add_command(label="Suchverlauf löschen", command=self.clear_history)
-        ex_m.add_command(label="Log-Datei öffnen", command=self._open_log)
-        m.add_cascade(label="Extras", menu=ex_m)
+        m = menu("Ansicht")
+        m.add_checkbutton(label="Vorschau", accelerator="Strg+P", variable=self.v_preview,
+                          command=self._toggle_preview)
+        tm = tk.Menu(m, tearoff=0)
+        self._menus.append(tm)
+        for key, label in theme.THEME_LABELS.items():
+            tm.add_radiobutton(label=label, value=key, variable=self.v_theme,
+                               command=lambda k=key: self.set_theme(k))
+        m.add_cascade(label="Darstellung", menu=tm)
 
-        help_m = tk.Menu(m, tearoff=0)
-        help_m.add_command(label="Tastenkürzel", accelerator="F1", command=self.show_shortcuts)
-        help_m.add_command(label="Everything-Suchsyntax", command=self.show_syntax_help)
-        help_m.add_separator()
-        help_m.add_command(label="Über ALLES", command=self.show_about)
-        m.add_cascade(label="Hilfe", menu=help_m)
+        m = menu("Werkzeuge")
+        m.add_command(label="Duplikate finden…", command=self.open_duplicates)
+        m.add_command(label="Diagnose", command=self.run_diagnose)
+        m.add_separator()
+        m.add_command(label="Everything starten", command=self.start_everything)
+        m.add_command(label="Aktuelle Suche in Everything öffnen",
+                      command=self.open_in_everything)
+        m.add_command(label="Eigenen Index neu aufbauen", command=self.rebuild_index)
+        m.add_command(label="Laufwerksliste aktualisieren", command=self._rebuild_drives)
+        m.add_separator()
+        m.add_command(label="Einstellungen…", accelerator="Strg+,",
+                      command=self.open_settings)
+        m.add_command(label="Suchverlauf löschen", command=self.clear_history)
+        m.add_command(label="Log-Datei öffnen", command=self._open_log)
+
+        m = menu("Hilfe")
+        m.add_command(label="Tastenkürzel", accelerator="F1", command=self.show_shortcuts)
+        m.add_command(label="Suchsyntax", command=self.show_syntax_help)
+        m.add_separator()
+        m.add_command(label="Projektseite auf GitHub",
+                      command=lambda: os.startfile("https://github.com/theStxve/alles"))
+        m.add_command(label="Über ALLES", command=self.show_about)
+
+        ttk.Label(bar, textvariable=self.v_mode, style="Hint.TLabel").pack(side=tk.RIGHT, padx=6)
+
+    def _post_menubutton(self, mb):
+        menu = self.root.nametowidget(mb.cget("menu"))
+        menu.tk_popup(mb.winfo_rootx(), mb.winfo_rooty() + mb.winfo_height())
+        return "break"
 
     def _build_ui(self):
         root = self.root
 
         # --- search row
-        top = ttk.Frame(root, padding=(10, 10, 10, 4))
+        top = ttk.Frame(root, padding=(10, 6, 10, 4))
         top.pack(fill=tk.X)
-        ttk.Label(top, text="Suche:", font=self.font_bold).pack(side=tk.LEFT)
         self.search_entry = ttk.Combobox(top, textvariable=self.v_text, values=self.history,
                                          font=self.font_search)
-        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         self.search_entry.bind("<<ComboboxSelected>>", lambda e: self.run_search())
-        ttk.Button(top, text="Leeren", command=self.clear_search).pack(side=tk.LEFT)
+        ttk.Button(top, text="Leeren", command=self.clear_search).pack(side=tk.LEFT, padx=(6, 0))
         self.start_btn = ttk.Button(top, text="Everything starten",
                                     command=self.start_everything)
 
-        # --- filter row
+        # --- filters
         fbar = ttk.Frame(root, padding=(10, 2, 10, 2))
         fbar.pack(fill=tk.X)
-        for label, var, table, width in (("Typ:", self.v_type, TYPE_PRESETS, 12),
-                                         ("Größe:", self.v_size, SIZE_PRESETS, 11),
-                                         ("Geändert:", self.v_date, DATE_PRESETS, 12),
-                                         ("Sortierung:", self.v_sort, SORT_OPTIONS, 16)):
+        for label, var, table, width in (("Typ", self.v_type, TYPE_PRESETS, 12),
+                                         ("Größe", self.v_size, SIZE_PRESETS, 11),
+                                         ("Geändert", self.v_date, DATE_PRESETS, 12),
+                                         ("Sortierung", self.v_sort, SORT_OPTIONS, 16)):
             ttk.Label(fbar, text=label).pack(side=tk.LEFT)
             cb = ttk.Combobox(fbar, textvariable=var, values=list(table), state="readonly",
                               width=width)
-            cb.pack(side=tk.LEFT, padx=(3, 10))
+            cb.pack(side=tk.LEFT, padx=(4, 12))
             cb.bind("<<ComboboxSelected>>", lambda e: self._on_filter_changed(now=True))
+        self.preset_menu = tk.Menu(root, tearoff=0, postcommand=self._fill_preset_menu)
+        self._menus.append(self.preset_menu)
+        ttk.Menubutton(fbar, text="★ Filter", menu=self.preset_menu).pack(side=tk.LEFT)
+
         obar = ttk.Frame(root, padding=(10, 2, 10, 2))
         obar.pack(fill=tk.X)
-        ttk.Label(obar, text="Optionen:").pack(side=tk.LEFT, padx=(0, 6))
         for label, var in (("Groß/Klein beachten", self.v_case), ("Ganzes Wort", self.v_whole),
                            ("Regex", self.v_regex), ("Auch im Pfad suchen", self.v_path)):
             ttk.Checkbutton(obar, text=label, variable=var,
                             command=lambda: self._on_filter_changed(now=True)).pack(
-                side=tk.LEFT, padx=(0, 8))
+                side=tk.LEFT, padx=(0, 12))
 
         # --- drive scope
-        self.drive_frame = ttk.LabelFrame(root, text="Laufwerke (Suchbereich)", padding=(8, 3))
-        self.drive_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
+        self.drive_frame = ttk.Frame(root, padding=(10, 2, 10, 2))
+        self.drive_frame.pack(fill=tk.X)
         self._rebuild_drives()
 
         # --- generated syntax
-        syn = ttk.Frame(root, padding=(10, 2, 10, 2))
+        syn = ttk.Frame(root, padding=(10, 2, 10, 4))
         syn.pack(fill=tk.X)
-        ttk.Label(syn, text="Everything-Syntax:", style="Hint.TLabel").pack(side=tk.LEFT)
-        syn_entry = ttk.Entry(syn, textvariable=self.v_syntax, state="readonly")
-        syn_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ttk.Button(syn, text="Kopieren", command=lambda: self._to_clipboard(
-            self.v_syntax.get())).pack(side=tk.LEFT)
+        ttk.Label(syn, text="Suchsyntax:", style="Hint.TLabel").pack(side=tk.LEFT)
+        ttk.Entry(syn, textvariable=self.v_syntax, state="readonly").pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(syn, text="Kopieren",
+                   command=lambda: self._to_clipboard(self.v_syntax.get())).pack(side=tk.LEFT)
 
-        # --- status bar (pack before the tree so it is never squeezed out)
+        # --- status bar
         status = ttk.Frame(root, padding=(10, 3, 10, 6))
         status.pack(fill=tk.X, side=tk.BOTTOM)
-        self.status_dot = tk.Canvas(status, width=14, height=14, highlightthickness=0,
-                                    bg=ttk.Style().lookup("TFrame", "background") or None)
+        self.status_dot = tk.Canvas(status, width=14, height=14, highlightthickness=0)
         self.status_dot.create_oval(3, 3, 11, 11, fill=STATUS_COLORS["info"], outline="",
                                     tags="dot")
         self.status_dot.pack(side=tk.LEFT)
@@ -324,41 +366,62 @@ class AllesApp:
         self.status_label.bind("<Enter>", self._show_status_tip)
         self.status_label.bind("<Leave>", self._hide_status_tip)
 
-        # --- results
-        tree_frame = ttk.Frame(root, padding=(10, 4, 10, 0))
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+        # --- results + preview
+        self.paned = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
+        self.paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 0))
+        tree_frame = ttk.Frame(self.paned)
         tree_frame.rowconfigure(0, weight=1)
         tree_frame.columnconfigure(0, weight=1)
         self.tree = ttk.Treeview(tree_frame, columns=[c[0] for c in COLUMNS],
-                                 show="headings", selectmode="extended")
+                                 show="tree headings", selectmode="extended")
         widths = self.cfg.get("columns") if isinstance(self.cfg.get("columns"), dict) else {}
+        self.tree.heading("#0", text="Name", anchor=tk.W,
+                          command=lambda: self.sort_by_column("name"))
+        self.tree.column("#0", width=cfgmod.clamp_int(widths.get("name"),
+                                                      int(NAME_COL_WIDTH * self.scale), 60,
+                                                      3000), stretch=True)
         for key, title, width, anchor in COLUMNS:
-            self.tree.heading(key, text=title, command=lambda k=key: self.sort_by_column(k))
+            self.tree.heading(key, text=title, anchor=anchor,
+                              command=lambda k=key: self.sort_by_column(k))
             w = cfgmod.clamp_int(widths.get(key), int(width * self.scale), 30, 3000)
-            self.tree.column(key, width=w, anchor=anchor, stretch=key in ("name", "folder"))
-        self.tree.tag_configure("dir", foreground="#1f5fbf")
+            self.tree.column(key, width=w, anchor=anchor, stretch=key == "folder")
         vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
+        self.paned.add(tree_frame, weight=3)
+        self.preview = PreviewPane(self.paned, self)
+        if self.v_preview.get():
+            self.paned.add(self.preview, weight=1)
         self._update_sort_headings()
+        self._build_context_menu()
 
-        self.ctx = tk.Menu(root, tearoff=0)
-        self.ctx.add_command(label="Öffnen", accelerator="Enter", command=self.open_selected)
-        self.ctx.add_command(label="Im Explorer anzeigen", accelerator="Strg+Enter",
-                             command=self.reveal_selected)
-        self.ctx.add_command(label="Eigenschaften", accelerator="Alt+Enter",
-                             command=self.properties_selected)
-        self.ctx.add_separator()
-        self.ctx.add_command(label="Pfad kopieren", accelerator="Strg+C",
-                             command=self.copy_paths)
-        self.ctx.add_command(label="Name kopieren", accelerator="Strg+Umschalt+C",
-                             command=self.copy_names)
-        self.ctx.add_command(label="Ordnerpfad kopieren", command=self.copy_folders)
-        self.ctx.add_separator()
-        self.ctx.add_command(label="In diesem Ordner suchen", command=self.search_in_folder)
+    def _build_context_menu(self):
+        c = self.ctx = tk.Menu(self.root, tearoff=0)
+        self._menus.append(c)
+        c.add_command(label="Öffnen", accelerator="Enter", command=self.open_selected)
+        c.add_command(label="Öffnen mit…", command=lambda: self._single(shell.open_with))
+        c.add_command(label="Im Explorer anzeigen", accelerator="Strg+Enter",
+                      command=self.reveal_selected)
+        c.add_command(label="Terminal hier öffnen", accelerator="Strg+T",
+                      command=self.terminal_here)
+        if shell.vscode_path():
+            c.add_command(label="In VS Code öffnen",
+                          command=lambda: self._single(shell.open_in_vscode))
+        c.add_separator()
+        c.add_command(label="Pfad kopieren", accelerator="Strg+C", command=self.copy_paths)
+        c.add_command(label="Name kopieren", accelerator="Strg+Umschalt+C",
+                      command=self.copy_names)
+        c.add_command(label="Ordnerpfad kopieren", command=self.copy_folders)
+        c.add_separator()
+        c.add_command(label="In diesem Ordner suchen", command=self.search_in_folder)
+        c.add_command(label="Eigenschaften", accelerator="Alt+Enter",
+                      command=self.properties_selected)
+        c.add_separator()
+        c.add_command(label="In den Papierkorb", accelerator="Entf",
+                      command=self.recycle_selected)
 
     def _bind_keys(self):
         r, t, e = self.root, self.tree, self.search_entry
@@ -369,23 +432,24 @@ class AllesApp:
         r.bind_all("<Control-s>", lambda ev: self.export_csv())
         r.bind_all("<Control-q>", lambda ev: self.quit())
         r.bind_all("<Control-comma>", lambda ev: self.open_settings())
-
+        r.bind_all("<Control-p>", lambda ev: self._toggle_preview(flip=True))
         e.bind("<Return>", self._on_search_return)
         e.bind("<Down>", self._focus_results)
         e.bind("<Alt-Down>", lambda ev: self._post_history())
         e.bind("<Escape>", self._on_search_escape)
-
-        t.bind("<Double-1>", lambda ev: self.open_selected())
+        t.bind("<Double-1>", self._on_double_click)
         t.bind("<Return>", lambda ev: self.open_selected())
         t.bind("<Control-Return>", lambda ev: self.reveal_selected())
         t.bind("<Alt-Return>", lambda ev: (self.properties_selected(), "break")[1])
         t.bind("<Control-c>", lambda ev: self.copy_paths())
-        t.bind("<Control-C>", lambda ev: self.copy_names())  # Ctrl+Shift+C
+        t.bind("<Control-C>", lambda ev: self.copy_names())
+        t.bind("<Control-t>", lambda ev: self.terminal_here())
+        t.bind("<Delete>", lambda ev: self.recycle_selected())
         t.bind("<Control-a>", lambda ev: (t.selection_set(t.get_children()), "break")[1])
         t.bind("<Escape>", lambda ev: self.focus_search())
         t.bind("<Up>", self._on_tree_up)
         t.bind("<Button-3>", self._on_right_click)
-        t.bind("<<TreeviewSelect>>", lambda ev: self._update_selection_status())
+        t.bind("<<TreeviewSelect>>", lambda ev: self._on_select())
 
     # ------------------------------------------------------------------ drives
     def _rebuild_drives(self):
@@ -393,29 +457,29 @@ class AllesApp:
             w.destroy()
         previous = {d for d, v in self.drive_vars.items() if v.get()} or self._saved_drives
         self.drive_vars = {}
-        ttk.Checkbutton(self.drive_frame, text="Alle Laufwerke", variable=self.v_all_drives,
+        ttk.Label(self.drive_frame, text="Laufwerke").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Checkbutton(self.drive_frame, text="Alle", variable=self.v_all_drives,
                         command=self._on_all_drives_toggle).pack(side=tk.LEFT, padx=(0, 12))
         self.drive_checks = []
+        show_labels = self.cfg.get("show_drive_labels", True)
         for d in shell.logical_drives():
-            label = shell.drive_label(d)
+            label = shell.drive_label(d) if show_labels else ""
             text = d.rstrip("\\") + (f" {label}" if label else "")
             v = tk.BooleanVar(value=d in previous)
             self.drive_vars[d] = v
             cb = ttk.Checkbutton(self.drive_frame, text=text, variable=v,
                                  command=self._on_drive_toggle)
-            cb.pack(side=tk.LEFT, padx=(0, 8))
+            cb.pack(side=tk.LEFT, padx=(0, 10))
             self.drive_checks.append(cb)
         self._sync_drive_state()
 
     def _sync_drive_state(self):
-        # Keep the drive checkboxes usable; "all drives" simply wins when on.
-        style = "disabled" if self.v_all_drives.get() else "!disabled"
+        state = "disabled" if self.v_all_drives.get() else "!disabled"
         for cb in self.drive_checks:
-            cb.state([style])
+            cb.state([state])
 
     def _on_all_drives_toggle(self):
         if not self.v_all_drives.get() and not any(v.get() for v in self.drive_vars.values()):
-            # nothing selected -> pre-select the system drive so the scope isn't empty
             sysdrive = (os.environ.get("SYSTEMDRIVE", "C:") + "\\").upper()
             if sysdrive in self.drive_vars:
                 self.drive_vars[sysdrive].set(True)
@@ -423,73 +487,104 @@ class AllesApp:
         self._on_filter_changed(now=True)
 
     def _on_drive_toggle(self):
-        if any(v.get() for v in self.drive_vars.values()):
-            self.v_all_drives.set(False)
-        else:
-            self.v_all_drives.set(True)
+        self.v_all_drives.set(not any(v.get() for v in self.drive_vars.values()))
         self._sync_drive_state()
         self._on_filter_changed(now=True)
 
-    # ------------------------------------------------------------------ SDK / connection
-    def _init_sdk(self):
-        try:
-            self.sdk = es.EverythingSDK()
-            self.sdk_error = None
-        except (OSError, FileNotFoundError) as exc:
-            self.sdk = None
-            self.sdk_error = str(exc)
-            log.error("SDK load failed: %s", exc)
-            self.set_status(f"Everything-SDK nicht geladen: {exc}", "err")
+    # ------------------------------------------------------------------ backends
+    def _select_backend(self):
+        mode = self.cfg.get("backend", BACKEND_AUTO)
+        use_everything = False
+        if mode == BACKEND_EVERYTHING:
+            use_everything = True
+            self.everything.load()
+        elif mode == BACKEND_AUTO and self.everything.load():
+            use_everything = self.everything.probe()[0] or bool(self.everything_exe())
+        if use_everything:
+            if self.index.service:
+                self.index.service.stop()
+                self.index.service = None
+            self.backend = self.everything
+        else:
+            self.backend = self.index
+            self._start_index_service()
+        self.v_mode.set(f"Suchmodus: {self.backend.label}")
+        log.info("backend: %s (mode=%s)", self.backend.label, mode)
+        self._status = None
+        self._update_syntax()
+        self._check_status()
+
+    def _start_index_service(self):
+        if self.index.service:
             return
-        self._check_connection()
+        minutes = cfgmod.clamp_int(self.cfg.get("index_refresh_minutes"), 60, 0, 10_080)
+        svc = IndexService(self.index.store, lambda: list(self.index_roots),
+                           lambda: list(self.excludes),
+                           on_state=lambda st: self.dispatch(self._on_index_state, st),
+                           max_age=minutes * 60 if minutes else float("inf"))
+        self.index.service = svc
+        svc.start()
 
-    def _probe(self):
-        """(alive, db_loaded, version) - safe to call from any thread."""
-        if self.sdk is None:
-            return (False, False, (0, 0, 0))
-        with self._sdk_lock:
-            ver = self.sdk.get_version()
-            if ver[0] == 0:
-                return (False, False, ver)
-            return (True, self.sdk.is_db_loaded(), ver)
+    def _on_index_state(self, st: IndexState):
+        if self.backend is not self.index:
+            return
+        was_busy = bool(self._status and self._status.busy)
+        status = self.index.status()
+        self._apply_status(status)
+        if st.error:
+            self.set_status(f"Index-Fehler: {st.error}", "err")
+        elif st.building:
+            folder = st.current if len(st.current) < 70 else "…" + st.current[-68:]
+            self.set_status(f"Index wird aufgebaut: {fmt_count(st.scanned)} Einträge  ·  "
+                            f"{folder}", "warn")
+        elif was_busy:
+            self._status = None
+            self._apply_status(status)  # fresh index swapped in -> refresh results
 
-    def _check_connection(self):
-        threading.Thread(target=lambda: self.dispatch(self._apply_connection, self._probe()),
-                         daemon=True).start()
+    def _check_status(self):
+        backend = self.backend
+        threading.Thread(target=lambda: self.dispatch(self._apply_status, backend.status(),
+                                                      backend), daemon=True).start()
 
-    def _apply_connection(self, state):
-        alive, db, ver = state
-        changed = (alive, db) != (self._conn_state[:2] if self._conn_state else None)
-        self._conn_state = state
-        if alive:
+    def _apply_status(self, status: Status, backend=None):
+        if backend is not None and backend is not self.backend:
+            return
+        prev = self._status
+        self._status = status
+        if self.backend is self.everything and not status.ready and self.everything.available:
+            if not self.start_btn.winfo_ismapped():
+                self.start_btn.pack(side=tk.LEFT, padx=(6, 0))
+        else:
             self.start_btn.pack_forget()
-        elif not self.start_btn.winfo_ismapped() and self.sdk is not None:
-            self.start_btn.pack(side=tk.LEFT, padx=(6, 0))
+        changed = prev is None or (prev.ready, prev.busy, prev.message) != (
+            status.ready, status.busy, status.message)
         if not changed:
             return
-        if self.sdk is None:
-            return
-        if not alive:
-            self.set_status("Everything läuft nicht (oder nur als Dienst). "
-                            "Bitte 'Everything starten' klicken.", "err")
-        elif not db:
-            self.set_status("Everything läuft, die Datenbank wird noch geladen...", "warn")
-        else:
-            self.set_status(f"Verbunden mit Everything {ver[0]}.{ver[1]}.{ver[2]}.", "ok")
+        if status.ready:
+            if not status.busy:
+                if self.backend is self.index:
+                    st = self.index.service.state if self.index.service else None
+                    n = fmt_count(st.entries) if st else "?"
+                    self.set_status(f"Bereit · eigener Index mit {n} Einträgen", "ok")
+                else:
+                    self.set_status(f"Verbunden mit {status.message}.", "ok")
             self.run_search()
+        elif not (self.backend is self.index and status.busy):
+            self.set_status(status.message, status.kind)
 
     def _watchdog_loop(self):
         while not self._closing:
             time.sleep(WATCHDOG_INTERVAL)
-            if self.sdk is None:
+            backend = self.backend
+            if backend is not self.everything or not self.everything.available:
                 continue
             try:
-                state = self._probe()
+                status = backend.status()
             except Exception:  # noqa: BLE001
-                log.exception("watchdog probe failed")
+                log.exception("watchdog failed")
                 continue
-            self.dispatch(self._apply_connection, state)
-            if (not state[0] and self.auto_repair
+            self.dispatch(self._apply_status, status, backend)
+            if (not status.ready and not status.busy and self.auto_repair
                     and time.time() - self._last_start_attempt > AUTOSTART_COOLDOWN):
                 self.dispatch(self.start_everything, False)
 
@@ -510,7 +605,6 @@ class AllesApp:
             self.save_config()
         self._last_start_attempt = time.time()
         try:
-            # -startup: start in the background (tray) instead of opening a window
             subprocess.Popen([exe, "-startup"], close_fds=True)
         except OSError as exc:
             log.error("start Everything failed: %s", exc)
@@ -518,49 +612,85 @@ class AllesApp:
                 messagebox.showerror("Fehler", f"Konnte Everything nicht starten:\n{exc}",
                                      parent=self.root)
             return
-        self.set_status("Everything wird gestartet...", "warn")
         log.info("started %s", exe)
+        self.set_status("Everything wird gestartet…", "warn")
         self.start_btn.state(["disabled"])
         threading.Thread(target=self._wait_for_everything, daemon=True).start()
 
     def _wait_for_everything(self):
+        self.everything.load()
         deadline = time.time() + 30
-        state = (False, False, (0, 0, 0))
+        status = None
         while time.time() < deadline and not self._closing:
             time.sleep(0.75)
-            state = self._probe()
-            if state[0] and state[1]:
+            status = self.everything.status()
+            if status.ready:
                 break
-        self.dispatch(self._after_start_wait, state)
+        self.dispatch(self._after_start_wait, status)
 
-    def _after_start_wait(self, state):
+    def _after_start_wait(self, status):
         self.start_btn.state(["!disabled"])
-        self._conn_state = None  # force a status refresh
-        self._apply_connection(state)
-        if not state[0]:
-            self.set_status("Everything antwortet nicht (Zeitüberschreitung). Läuft evtl. nur "
-                            "der Dienst - die Everything-Oberfläche einmal manuell starten.",
-                            "err")
+        if status is None:
+            return
+        if self.backend is not self.everything:
+            if status.ready and self.cfg.get("backend", BACKEND_AUTO) == BACKEND_AUTO:
+                self._select_backend()
+            return
+        self._status = None
+        self._apply_status(status)
+        if not status.ready and not status.busy:
+            self.set_status("Everything antwortet nicht. Läuft evtl. nur der Dienst? Die "
+                            "Everything-Oberfläche einmal manuell starten.", "err")
 
     def open_in_everything(self):
         exe = self.everything_exe()
         if not exe:
-            messagebox.showinfo("ALLES", "Everything.exe wurde nicht gefunden. Pfad unter "
-                                "Extras > Einstellungen festlegen.", parent=self.root)
+            messagebox.showinfo("ALLES", "Everything.exe wurde nicht gefunden.",
+                                parent=self.root)
             return
-        q = build_query(self.options())
-        args = [exe, "-search", q.search]
-        args.append("-case" if q.match_case else "-nocase")
-        args.append("-ww" if q.whole_word else "-noww")
-        args.append("-matchpath" if q.match_path else "-nomatchpath")
+        q = build_query(self.options(), self.excludes)
+        args = [exe, "-search", q.search,
+                "-case" if q.match_case else "-nocase",
+                "-ww" if q.whole_word else "-noww",
+                "-matchpath" if q.match_path else "-nomatchpath"]
         try:
             subprocess.Popen(args, close_fds=True)
         except OSError as exc:
             messagebox.showerror("Fehler", str(exc), parent=self.root)
 
+    def rebuild_index(self):
+        if self.backend is not self.index:
+            if not messagebox.askyesno(
+                    "Eigener Index", "Der eigene Index wird nur im Suchmodus „Eigener Index“ "
+                    "verwendet. Jetzt zu diesem Modus wechseln und den Index aufbauen?",
+                    parent=self.root):
+                return
+            self.cfg["backend"] = BACKEND_INDEX
+            self.save_config()
+            self._select_backend()
+        if self.index.service:
+            self.index.service.rebuild(force=True)
+
+    def index_info_text(self) -> str:
+        st = self.index.service.state if self.index.service else None
+        store = self.index.store
+        if not store.exists():
+            return "Noch kein Index vorhanden."
+        try:
+            stats = store.stats()
+            built = float(store.meta().get("built_at", 0) or 0)
+        except Exception:  # noqa: BLE001
+            return "Index-Informationen nicht verfügbar."
+        when = time.strftime("%d.%m.%Y %H:%M", time.localtime(built)) if built else "-"
+        return "\n".join([
+            f"{fmt_count(stats['entries'])} Einträge · {fmt_size(stats.get('bytes', 0))} "
+            "auf der Festplatte",
+            f"Zuletzt komplett aufgebaut: {when}",
+            f"Live-Überwachung: {st.watching if st else 0} Ordner"])
+
     # ------------------------------------------------------------------ diagnose
     def run_diagnose(self):
-        self.set_status("Diagnose läuft...", "info")
+        self.set_status("Diagnose läuft…", "info")
         threading.Thread(target=self._diagnose_worker, daemon=True).start()
 
     def _diagnose_worker(self):
@@ -570,71 +700,73 @@ class AllesApp:
             log.exception("diagnose failed")
             text = f"Diagnose fehlgeschlagen: {exc}"
         self.dispatch(lambda: messagebox.showinfo("ALLES Diagnose", text, parent=self.root))
-        self.dispatch(self._check_connection)
+        self.dispatch(self._check_status)
 
     def _diagnose_text(self) -> str:
-        lines = [f"ALLES {__version__}  |  Python {sys.version.split()[0]}"]
-        lines.append(f"Everything.exe: {self.everything_exe() or 'nicht gefunden'}")
-        if self.sdk is None:
-            lines.append(f"SDK: NICHT geladen ({self.sdk_error})")
+        lines = [f"ALLES {__version__}  ·  Python {sys.version.split()[0]}",
+                 f"Suchmodus: {self.backend.label}", ""]
+        if self.backend is self.index:
+            lines.append(self.index_info_text())
+            lines.append("Indizierte Ordner: " + ", ".join(self.index_roots))
             return "\n".join(lines)
-        lines.append(f"SDK: {self.sdk.dll_path}")
-        alive, db, ver = self._probe()
+        lines.append(f"Everything.exe: {self.everything_exe() or 'nicht gefunden'}")
+        ev = self.everything
+        if not ev.available:
+            lines.append(f"SDK: NICHT geladen ({ev.error})")
+            return "\n".join(lines)
+        lines.append(f"SDK: {ev.sdk.dll_path}")
+        alive, db, ver = ev.probe()
         if not alive:
-            lines += ["", "Everything antwortet nicht (läuft evtl. nur der Dienst).",
-                      "'Everything starten' klicken und erneut testen."]
+            lines += ["", "Everything antwortet nicht (läuft evtl. nur der Dienst)."]
             return "\n".join(lines)
         lines.append(f"Everything {ver[0]}.{ver[1]}.{ver[2]}, Datenbank "
                      f"{'geladen' if db else 'lädt noch'}")
         indexed, missing = [], []
         for d in shell.logical_drives():
-            with self._sdk_lock:
-                self.sdk.reset()
-                self.sdk.set_search(f'parent:"{d}"')
-                self.sdk.set_max(1)
-                try:
-                    n = self.sdk.query(wait=True)
-                except es.EverythingError:
-                    n = 0
+            n = ev.count_in(f'parent:"{d}"')
             (indexed if n > 0 else missing).append(d.rstrip("\\"))
-        lines += ["", "Indiziert: " + (", ".join(indexed) or "-")]
+        lines += ["", "Im Everything-Index: " + (", ".join(indexed) or "-")]
         if missing:
             lines += ["NICHT im Index: " + ", ".join(missing), "",
-                      "Tipp: FAT/exFAT- und Netzlaufwerke brauchen in Everything unter",
-                      "Extras > Optionen > Indizes > Ordner einen Ordner-Index."]
+                      "Tipp: FAT/exFAT- und Netzlaufwerke müssen in Everything unter",
+                      "Extras > Optionen > Indizes > Ordner hinzugefügt werden – oder",
+                      "du nutzt den Suchmodus „Eigener Index“, der sie direkt einliest."]
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ search
     def options(self) -> SearchOptions:
         return SearchOptions(
-            text=self.v_text.get(),
-            all_drives=self.v_all_drives.get(),
+            text=self.v_text.get(), all_drives=self.v_all_drives.get(),
             drives=[d for d, v in self.drive_vars.items() if v.get()],
             type=self.v_type.get(), size=self.v_size.get(), date=self.v_date.get(),
             sort=self.v_sort.get(), match_case=self.v_case.get(),
             whole_word=self.v_whole.get(), regex=self.v_regex.get(),
             match_path=self.v_path.get())
 
+    def current_query(self, files_only: bool = False) -> Query:
+        opts = self.options()
+        if files_only and opts.type in ("Alles", "Nur Ordner"):
+            opts.type = "Nur Dateien"
+        # the built-in index never contains excluded folders -> no extra terms needed
+        excludes = self.excludes if self.backend is self.everything else ()
+        return build_query(opts, excludes)
+
+    def _update_syntax(self):
+        self.v_syntax.set(self.current_query().search or "(alles)")
+
     def _on_filter_changed(self, now=False):
-        if self._suspend_trace:
-            return
         self._update_sort_headings()
         self._update_syntax()
         if self._search_timer:
             self.root.after_cancel(self._search_timer)
-        self._search_timer = self.root.after(0 if now else 180, self.run_search)
-
-    def _update_syntax(self):
-        self.v_syntax.set(build_query(self.options()).search or "(alles)")
+        self._search_timer = self.root.after(0 if now else 150, self.run_search)
 
     def run_search(self, append=False):
         self._search_timer = None
-        q = self._last_query if append and self._last_query else build_query(self.options())
+        q = self._last_query if append and self._last_query else self.current_query()
         self.v_syntax.set(q.search or "(alles)")
-        if self.sdk is None:
+        if self.backend is None or (self._status and not self._status.ready):
             return
-        if self._conn_state and not self._conn_state[0]:
-            return  # not connected - the status bar already explains why
         self._gen += 1
         offset = len(self._rows) if append else 0
         req = SearchRequest(self._gen, q, offset, self.max_display, append)
@@ -645,83 +777,164 @@ class AllesApp:
             self._last_query = q
 
     def _search_worker(self):
+        from . import thumbs
         while True:
             with self._req_cond:
                 while self._pending is None:
                     self._req_cond.wait()
                 req, self._pending = self._pending, None
+            backend = self.backend
             try:
-                result = self._execute(req)
-            except es.EverythingError as exc:
+                result = backend.search(req.query, req.offset, req.limit,
+                                        lambda g=req.gen: g != self._gen)
+            except SearchError as exc:
                 result = exc
             except Exception as exc:  # noqa: BLE001
                 log.exception("search failed")
                 result = exc
-            if result is not None:
-                self.dispatch(self._on_search_done, req, result)
+            if result is None:
+                continue
+            if not isinstance(result, Exception):
+                self._prepare_icons(result.rows, thumbs)
+            self.dispatch(self._on_search_done, req, result)
 
-    def _execute(self, req: SearchRequest):
-        q = req.query
-        with self._sdk_lock:
-            if req.gen != self._gen or self.sdk is None:
-                return None  # superseded while waiting for the lock
-            s = self.sdk
-            s.reset()
-            s.set_search(q.search)
-            s.set_match_case(q.match_case)
-            s.set_match_whole_word(q.whole_word)
-            s.set_match_path(q.match_path)
-            s.set_sort(q.sort)
-            s.set_request_flags(REQUEST_FLAGS)
-            s.set_max(req.limit)
-            s.set_offset(req.offset)
-            t0 = time.perf_counter()
-            num = s.query(wait=True)
-            total = s.get_total_results()
-            rows = []
-            for i in range(num):
-                if i % 256 == 0 and req.gen != self._gen:
-                    return None  # user typed on - drop stale results early
-                path = s.get_result_full_path(i)
-                if not path:
-                    continue
-                folder, name = os.path.split(path)
-                rows.append(Row(path, name or path, folder, s.get_result_size(i),
-                                s.get_result_date_modified(i), s.get_result_extension(i),
-                                s.is_result_folder(i)))
-            elapsed = (time.perf_counter() - t0) * 1000
-        return rows, total, elapsed
+    def _prepare_icons(self, rows, thumbs):
+        """Look up icons/type names for new extensions off the UI thread."""
+        try:
+            thumbs.com_init()
+            for key in {(r.ext.lower(), r.is_dir) for r in rows}:
+                with self._icon_lock:
+                    if key in self._icon_png:
+                        continue
+                info = thumbs.type_info(key[0], key[1], max(16, int(16 * self.scale)))
+                with self._icon_lock:
+                    self._icon_png[key] = info
+        except OSError:
+            pass
+
+    def _icon_for(self, row: Row):
+        key = (row.ext.lower(), row.is_dir)
+        img = self._icons.get(key)
+        if img is None:
+            with self._icon_lock:
+                png, name = self._icon_png.get(key, (None, ""))
+            self._type_names[key] = name
+            try:
+                img = tk.PhotoImage(data=png) if png else ""
+            except tk.TclError:
+                img = ""
+            self._icons[key] = img
+        return img
+
+    def type_name(self, row: Row) -> str:
+        key = (row.ext.lower(), row.is_dir)
+        if key not in self._type_names:
+            self._icon_for(row)
+        return self._type_names.get(key) or ("Ordner" if row.is_dir else
+                                             (row.ext.upper() + "-Datei" if row.ext else "Datei"))
 
     def _on_search_done(self, req: SearchRequest, result):
         if req.gen != self._gen:
             return
         if isinstance(result, Exception):
-            kind = "Everything-Fehler" if isinstance(result, es.EverythingError) else "Fehler"
-            self.set_status(f"{kind}: {result}", "err")
-            if isinstance(result, es.EverythingError):
-                self._check_connection()
+            self.set_status(str(result), "err")
+            if self.backend is self.everything:
+                self._check_status()
             return
-        rows, total, elapsed = result
         if not req.append:
             self.tree.delete(*self.tree.get_children())
             self._rows = []
             self.tree.yview_moveto(0)
         start = len(self._rows)
-        for i, row in enumerate(rows, start):
-            self.tree.insert("", tk.END, iid=str(i), values=row.display(),
+        for i, row in enumerate(result.rows, start):
+            folder, size, date, _ = row.display()
+            self.tree.insert("", tk.END, iid=str(i), text=" " + row.name,
+                             image=self._icon_for(row),
+                             values=(folder, size, date, self.type_name(row)),
                              tags=("dir",) if row.is_dir else ())
-        self._rows.extend(rows)
-        self._total = total
+        self._rows.extend(result.rows)
         shown = len(self._rows)
-        more = total > shown
+        more = result.total > shown
         if more:
             self.more_btn.pack(side=tk.RIGHT)
         else:
             self.more_btn.pack_forget()
-        text = f"{fmt_count(total)} Treffer"
+        total = fmt_count(result.total) + ("+" if result.capped else "")
+        text = f"{total} Treffer"
         if more:
             text += f" ({fmt_count(shown)} angezeigt)"
-        self.set_status(f"{text}  ·  {elapsed:.0f} ms", "ok" if total else "info")
+        self.set_status(f"{text}  ·  {result.elapsed_ms:.0f} ms  ·  {self.backend.label}",
+                        "ok" if result.total else "info")
+        if not req.append:
+            self.preview.show_empty()
+
+    # ------------------------------------------------------------------ presets
+    def _fill_preset_menu(self):
+        m = self.preset_menu
+        m.delete(0, tk.END)
+        for name, data in BUILTIN_PRESETS.items():
+            m.add_command(label=name, command=lambda d=data: self.apply_preset(d))
+        if self.presets:
+            m.add_separator()
+            for name, data in sorted(self.presets.items()):
+                m.add_command(label="★ " + name, command=lambda d=data: self.apply_preset(d))
+        m.add_separator()
+        m.add_command(label="Aktuelle Filter speichern…", command=self.save_preset)
+        if self.presets:
+            dm = tk.Menu(m, tearoff=0)
+            for name in sorted(self.presets):
+                dm.add_command(label=name, command=lambda n=name: self.delete_preset(n))
+            m.add_cascade(label="Gespeicherten Filter löschen", menu=dm)
+        m.add_command(label="Alle Filter zurücksetzen", command=lambda: self.apply_preset({
+            "type": "Alles", "size": "Egal", "date": "Egal", "sort": DEFAULT_SORT,
+            "case": False, "whole": False, "regex": False, "path": False,
+            "all_drives": True}))
+
+    def current_filters(self) -> dict:
+        return {"type": self.v_type.get(), "size": self.v_size.get(),
+                "date": self.v_date.get(), "sort": self.v_sort.get(),
+                "case": self.v_case.get(), "whole": self.v_whole.get(),
+                "regex": self.v_regex.get(), "path": self.v_path.get(),
+                "all_drives": self.v_all_drives.get(),
+                "drives": [d for d, v in self.drive_vars.items() if v.get()]}
+
+    def apply_preset(self, data: dict):
+        for key, var, table in (("type", self.v_type, TYPE_PRESETS),
+                                ("size", self.v_size, SIZE_PRESETS),
+                                ("date", self.v_date, DATE_PRESETS),
+                                ("sort", self.v_sort, SORT_OPTIONS)):
+            if data.get(key) in table:
+                var.set(data[key])
+        for key, var in (("case", self.v_case), ("whole", self.v_whole),
+                         ("regex", self.v_regex), ("path", self.v_path)):
+            if key in data:
+                var.set(bool(data[key]))
+        if "all_drives" in data:
+            self.v_all_drives.set(bool(data["all_drives"]))
+            wanted = set(data.get("drives", []))
+            for d, v in self.drive_vars.items():
+                v.set(d in wanted)
+            self._sync_drive_state()
+        if "text" in data:
+            self.v_text.set(data["text"])
+        self._on_filter_changed(now=True)
+
+    def save_preset(self):
+        name = simpledialog.askstring("Filter speichern", "Name für diese Filterkombination:",
+                                      parent=self.root)
+        if not name or not name.strip():
+            return
+        data = self.current_filters()
+        if self.v_text.get().strip() and messagebox.askyesno(
+                "Filter speichern", "Den aktuellen Suchbegriff mitspeichern?", parent=self.root):
+            data["text"] = self.v_text.get()
+        self.presets[name.strip()] = data
+        self.save_config()
+        self.set_status(f"Filter „{name.strip()}“ gespeichert.", "ok")
+
+    def delete_preset(self, name):
+        self.presets.pop(name, None)
+        self.save_config()
 
     # ------------------------------------------------------------------ sorting
     def sort_by_column(self, column):
@@ -731,10 +944,10 @@ class AllesApp:
 
     def _update_sort_headings(self):
         current = self.v_sort.get()
-        for key, title, *_ in COLUMNS:
+        for key, title in (("name", "Name"), *((c[0], c[1]) for c in COLUMNS)):
             asc, desc = COLUMN_SORTS[key]
             arrow = " ▲" if current == asc else " ▼" if current == desc else ""
-            self.tree.heading(key, text=title + arrow)
+            self.tree.heading("#0" if key == "name" else key, text=title + arrow)
 
     # ------------------------------------------------------------------ result actions
     def selected_rows(self) -> list[Row]:
@@ -752,6 +965,10 @@ class AllesApp:
             self.history = cfgmod.push_history(self.history, text)
             self.search_entry.configure(values=self.history)
 
+    def _on_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) in ("tree", "cell"):
+            self.open_selected()
+
     def open_selected(self):
         rows = self.selected_rows()
         if not rows:
@@ -761,20 +978,42 @@ class AllesApp:
             return
         self._remember_search()
         for row in rows:
-            self._shell_action(shell.open_path, row.path)
+            self.shell_action(shell.open_path, row.path)
 
-    def reveal_selected(self):
+    def _single(self, fn):
         rows = self.selected_rows()
         if rows:
             self._remember_search()
-            self._shell_action(shell.reveal_in_explorer, rows[0].path)
+            self.shell_action(fn, rows[0].path)
+
+    def reveal_selected(self):
+        self._single(shell.reveal_in_explorer)
 
     def properties_selected(self):
+        self._single(shell.show_properties)
+
+    def terminal_here(self):
         rows = self.selected_rows()
         if rows:
-            self._shell_action(shell.show_properties, rows[0].path)
+            r = rows[0]
+            self.shell_action(shell.open_terminal, r.path if r.is_dir else r.folder)
 
-    def _shell_action(self, fn, path):
+    def recycle_selected(self):
+        rows = self.selected_rows()
+        if not rows:
+            return
+        what = f"„{rows[0].name}“" if len(rows) == 1 else f"{len(rows)} Elemente"
+        if not messagebox.askyesno("In den Papierkorb",
+                                   f"{what} in den Papierkorb verschieben?", parent=self.root):
+            return
+        ok = shell.recycle([r.path for r in rows], self.frame_hwnd())
+        for iid in self.tree.selection():
+            if not os.path.exists(self._rows[int(iid)].path):
+                self.tree.delete(iid)
+        self.set_status(f"{what} in den Papierkorb verschoben." if ok else
+                        "Nicht alles konnte verschoben werden.", "ok" if ok else "err")
+
+    def shell_action(self, fn, path):
         try:
             fn(path)
         except OSError as exc:
@@ -787,8 +1026,7 @@ class AllesApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
             n = text.count("\n") + 1
-            self.set_status(f"{n} Eintrag kopiert." if n == 1 else f"{n} Einträge kopiert.",
-                            "ok")
+            self.set_status("1 Eintrag kopiert." if n == 1 else f"{n} Einträge kopiert.", "ok")
 
     def copy_paths(self):
         self._to_clipboard("\n".join(r.path for r in self.selected_rows()))
@@ -802,18 +1040,43 @@ class AllesApp:
         folders = dict.fromkeys(r.path if r.is_dir else r.folder for r in self.selected_rows())
         self._to_clipboard("\n".join(folders))
 
-    def search_in_folder(self):
-        rows = self.selected_rows()
-        if not rows:
-            return
-        folder = rows[0].path if rows[0].is_dir else rows[0].folder
+    def search_in_folder(self, folder: str | None = None):
+        if folder is None:
+            rows = self.selected_rows()
+            if not rows:
+                return
+            folder = rows[0].path if rows[0].is_dir else rows[0].folder
         self.v_text.set(f'"{folder.rstrip(os.sep)}\\" ')
         self.focus_search(select=False)
 
-    def _update_selection_status(self):
+    def _on_select(self):
+        if self._preview_timer:
+            self.root.after_cancel(self._preview_timer)
+        self._preview_timer = self.root.after(120, self._update_preview)
         n = len(self.tree.selection())
         if n > 1:
             self.set_status(f"{n} Elemente ausgewählt", "info")
+
+    def _update_preview(self):
+        self._preview_timer = None
+        if not self.v_preview.get():
+            return
+        rows = self.selected_rows()
+        if not rows:
+            self.preview.show_empty()
+        else:
+            self.preview.show(rows[0], len(rows))
+
+    def _toggle_preview(self, flip=False):
+        if flip:
+            self.v_preview.set(not self.v_preview.get())
+        panes = self.paned.panes()
+        if self.v_preview.get() and str(self.preview) not in panes:
+            self.paned.add(self.preview, weight=1)
+            self._update_preview()
+        elif not self.v_preview.get() and str(self.preview) in panes:
+            self.paned.forget(self.preview)
+        return "break"
 
     def export_csv(self):
         if not self._rows:
@@ -831,7 +1094,7 @@ class AllesApp:
                 for r in self._rows:
                     w.writerow([r.name, r.folder, "" if r.size is None else r.size,
                                 r.modified.isoformat(timespec="seconds") if r.modified else "",
-                                "Ordner" if r.is_dir else r.ext, r.path])
+                                self.type_name(r), r.path])
         except OSError as exc:
             messagebox.showerror("Fehler", str(exc), parent=self.root)
             return
@@ -864,14 +1127,14 @@ class AllesApp:
             self.tree.focus_set()
             if not self.tree.selection():
                 self.tree.selection_set(children[0])
-            self.tree.focus(self.tree.selection()[0])
-            self.tree.see(self.tree.selection()[0])
+            first = self.tree.selection()[0]
+            self.tree.focus(first)
+            self.tree.see(first)
         return "break"
 
     def _on_tree_up(self, event=None):
-        focus = self.tree.focus()
         children = self.tree.get_children()
-        if children and focus == children[0]:
+        if children and self.tree.focus() == children[0]:
             return self.focus_search()
         return None
 
@@ -910,15 +1173,13 @@ class AllesApp:
         lbl = self.status_label
         text = self.v_status.get()
         if not text or tkfont.nametofont("TkDefaultFont").measure(text) < lbl.winfo_width():
-            return  # fully visible, no tooltip needed
+            return
         tip = tk.Toplevel(self.root)
         tip.wm_overrideredirect(True)
         tip.wm_attributes("-topmost", True)
         ttk.Label(tip, text=text, padding=(6, 3), relief=tk.SOLID, wraplength=700).pack()
         tip.update_idletasks()
-        x = lbl.winfo_rootx()
-        y = lbl.winfo_rooty() - tip.winfo_reqheight() - 4
-        tip.wm_geometry(f"+{x}+{y}")
+        tip.wm_geometry(f"+{lbl.winfo_rootx()}+{lbl.winfo_rooty() - tip.winfo_reqheight() - 4}")
         self._status_tip = tip
 
     def _hide_status_tip(self, event=None):
@@ -935,22 +1196,18 @@ class AllesApp:
         if isinstance(geo, str) and self._geometry_on_screen(geo):
             self.root.geometry(geo)
         else:
-            self.root.geometry(f"{int(1150 * self._dpi())}x{int(720 * self._dpi())}")
+            self.root.geometry(f"{int(1280 * self.scale)}x{int(760 * self.scale)}")
         if self.cfg.get("maximized"):
             self.root.state("zoomed")
 
-    def _dpi(self):
-        return self.root.winfo_fpixels("1i") / 96.0
-
     @staticmethod
     def _geometry_on_screen(geo: str) -> bool:
-        """Reject saved positions on a monitor that is no longer connected."""
         parsed = parse_geometry(geo)
         if not parsed:
             return False
         try:
             gsm = _user32.GetSystemMetrics
-            virtual = (gsm(76), gsm(77), gsm(78), gsm(79))  # SM_[XY]VIRTUALSCREEN, SM_C[XY]...
+            virtual = (gsm(76), gsm(77), gsm(78), gsm(79))
         except (AttributeError, OSError):
             return True
         return geometry_visible(parsed, virtual)
@@ -965,7 +1222,7 @@ class AllesApp:
         except tk.TclError:
             pass
 
-    def _frame_hwnd(self):
+    def frame_hwnd(self):
         try:
             return int(self.root.wm_frame(), 16)
         except (tk.TclError, ValueError):
@@ -978,7 +1235,7 @@ class AllesApp:
         self.root.lift()
         self.root.attributes("-topmost", True)
         self.root.after(50, lambda: self.root.attributes("-topmost", False))
-        hwnd = self._frame_hwnd()
+        hwnd = self.frame_hwnd()
         if hwnd:
             _user32.SetForegroundWindow(hwnd)
         self.root.focus_force()
@@ -986,7 +1243,7 @@ class AllesApp:
 
     def hide_to_tray(self):
         if self.tray is None or self.tray.hwnd is None:
-            self.root.iconify()  # no tray icon -> never make the window unreachable
+            self.root.iconify()
             return
         self._remember_window()
         self.save_config()
@@ -995,7 +1252,7 @@ class AllesApp:
 
     def toggle_window(self):
         visible = self.root.state() not in ("withdrawn", "iconic")
-        hwnd = self._frame_hwnd()
+        hwnd = self.frame_hwnd()
         focused = bool(hwnd) and _user32.GetForegroundWindow() == hwnd
         if visible and focused:
             self.hide_to_tray()
@@ -1008,29 +1265,78 @@ class AllesApp:
         else:
             self.quit()
 
+    def on_remote_message(self, text: str):
+        """Arguments forwarded from a second instance (e.g. Explorer context menu)."""
+        try:
+            args = json.loads(text)
+        except ValueError:
+            args = {}
+        self.handle_args(args if isinstance(args, dict) else {})
+        self.show_window()
+
+    def handle_args(self, args: dict):
+        folder = normalize_folder_arg(str(args.get("folder") or ""))
+        if folder:
+            self.search_in_folder(folder)
+        elif args.get("search"):
+            self.v_text.set(str(args["search"]))
+
     def on_hotkey_changed(self, combo, is_preferred):
         if combo is None:
             self.set_status("Kein globaler Hotkey frei (alle Kombinationen belegt).", "warn")
         elif self.cfg.get("hotkey_vk") and not is_preferred:
-            self.set_status(f"Gewünschter Hotkey belegt - verwende {vk_display(*combo)}.",
+            self.set_status(f"Gewünschter Hotkey belegt – verwende {vk_display(*combo)}.",
                             "warn")
         log.info("hotkey: %s", vk_display(*combo) if combo else None)
 
+    # ------------------------------------------------------------------ settings
+    def apply_settings(self, s: dict):
+        cfg = self.cfg
+        self.max_display = cfgmod.clamp_int(s["max_display"], self.max_display,
+                                            cfgmod.MIN_MAX_DISPLAY, cfgmod.MAX_MAX_DISPLAY)
+        self.close_to_tray = bool(s["close_to_tray"])
+        self.auto_repair = bool(s["auto_repair"])
+        if s["everything_exe"]:
+            cfg["everything_exe"] = s["everything_exe"]
+        else:
+            cfg.pop("everything_exe", None)
+        if cfg.get("show_drive_labels", True) != s["show_drive_labels"]:
+            cfg["show_drive_labels"] = s["show_drive_labels"]
+            self._rebuild_drives()
+        if s["theme"] != cfg.get("theme", theme.THEME_SYSTEM):
+            self.v_theme.set(s["theme"])
+            self.set_theme(s["theme"])
+        index_changed = s["index_roots"] != self.index_roots or s["excludes"] != self.excludes
+        self.excludes = s["excludes"]
+        self.index_roots = s["index_roots"]
+        cfg["index_refresh_minutes"] = cfgmod.clamp_int(s["index_refresh_minutes"], 60, 0,
+                                                        10_080)
+        if s["hotkey"]:
+            cfg["hotkey_mod"], cfg["hotkey_vk"] = s["hotkey"]
+            if self.tray:
+                self.tray.request_reregister(s["hotkey"])
+        backend_changed = s["backend"] != cfg.get("backend", BACKEND_AUTO)
+        cfg["backend"] = s["backend"]
+        self.save_config()
+        had_service = self.index.service is not None
+        if backend_changed:
+            self._select_backend()
+        # a service that was already running keeps its old roots unless told so;
+        # a freshly started one already read the new settings
+        if index_changed and had_service and self.index.service:
+            self.index.service.reconfigure()
+        self._on_filter_changed(now=True)
+        self.set_status("Einstellungen gespeichert.", "ok")
+
     def save_config(self):
         self.cfg.update({
-            "max_display": self.max_display,
-            "auto_repair": self.auto_repair,
-            "close_to_tray": self.close_to_tray,
-            "history": self.history,
-            "columns": {k: self.tree.column(k, "width") for k, *_ in COLUMNS},
-            "filters": {
-                "type": self.v_type.get(), "size": self.v_size.get(),
-                "date": self.v_date.get(), "sort": self.v_sort.get(),
-                "case": self.v_case.get(), "whole": self.v_whole.get(),
-                "regex": self.v_regex.get(), "path": self.v_path.get(),
-                "all_drives": self.v_all_drives.get(),
-                "drives": [d for d, v in self.drive_vars.items() if v.get()],
-            },
+            "max_display": self.max_display, "auto_repair": self.auto_repair,
+            "close_to_tray": self.close_to_tray, "history": self.history,
+            "excludes": self.excludes, "index_roots": self.index_roots,
+            "presets": self.presets, "preview": self.v_preview.get(),
+            "columns": {"name": self.tree.column("#0", "width"),
+                        **{k: self.tree.column(k, "width") for k, *_ in COLUMNS}},
+            "filters": self.current_filters(),
         })
         if not cfgmod.save_config(self.cfg):
             log.warning("could not save config")
@@ -1043,26 +1349,30 @@ class AllesApp:
         self._closing = True
         if self.tray:
             self.tray.stop()
-        try:
-            with self._sdk_lock:
-                if self.sdk:
-                    self.sdk.cleanup()
-        except Exception:  # noqa: BLE001
-            pass
+        for backend in (self.everything, self.index):
+            try:
+                backend.close()
+            except Exception:  # noqa: BLE001
+                pass
         self.root.destroy()
 
     # ------------------------------------------------------------------ dialogs
-    def open_settings(self):
-        SettingsDialog(self)
+    def open_settings(self, tab: int = 0):
+        from .dialogs import SettingsDialog
+        SettingsDialog(self, tab)
+
+    def open_duplicates(self):
+        from .dialogs import DuplicatesDialog
+        DuplicatesDialog(self)
 
     def _open_log(self):
         path = os.path.join(cfgmod.CONFIG_DIR, "alles.log")
         if os.path.exists(path):
-            self._shell_action(shell.open_path, path)
+            self.shell_action(shell.open_path, path)
 
     def show_shortcuts(self):
-        hotkey = vk_display(*self.tray.hotkey_combo) if self.tray and \
-            self.tray.hotkey_combo else "(keiner)"
+        hotkey = (vk_display(*self.tray.hotkey_combo)
+                  if self.tray and self.tray.hotkey_combo else "(keiner)")
         messagebox.showinfo("Tastenkürzel", "\n".join([
             f"{hotkey}\tFenster ein-/ausblenden (global)",
             "Strg+F / Strg+L\tSuchfeld fokussieren",
@@ -1071,9 +1381,12 @@ class AllesApp:
             "Enter\tÖffnen",
             "Strg+Enter\tIm Explorer anzeigen",
             "Alt+Enter\tEigenschaften",
+            "Strg+T\tTerminal im Ordner öffnen",
+            "Entf\tIn den Papierkorb",
             "Strg+C\tPfad(e) kopieren",
             "Strg+Umschalt+C\tName(n) kopieren",
             "Strg+A\tAlle Ergebnisse markieren",
+            "Strg+P\tVorschau ein/aus",
             "F5\tSuche wiederholen",
             "Strg+S\tAls CSV exportieren",
             "Esc\tSuche leeren / in den Tray",
@@ -1081,195 +1394,43 @@ class AllesApp:
         ]), parent=self.root)
 
     def show_syntax_help(self):
-        messagebox.showinfo("Everything-Suchsyntax", "\n".join([
+        messagebox.showinfo("Suchsyntax", "\n".join([
             "Leerzeichen\tUND:  rechnung 2024",
             "|\tODER:  jpg | png",
             "!\tNICHT:  !temp",
             "< >\tGruppe:  <jpg | png> urlaub",
             '" "\tGenaue Phrase:  "mein ordner"',
             "* ?\tPlatzhalter:  *.pdf  bericht?.doc",
+            "\\\tPfad:  \\projekte\\ angebot",
             "ext:\text:pdf;docx",
-            "size:\tsize:>10mb",
-            "dm:\tdm:today  dm:2024",
+            "size:\tsize:>10mb  size:1mb..5mb",
+            "dm:\tdm:today  dm:2024  dm:lastweek",
             "parent:\tparent:C:\\Users",
             "regex:\tregex:^IMG_\\d+",
             "",
-            "Die Filter oben erzeugen diese Syntax automatisch.",
+            "Die Filter oben erzeugen diese Syntax automatisch. Sie funktioniert",
+            "mit Everything und mit dem eigenen Index.",
         ]), parent=self.root)
 
     def show_about(self):
-        ver = self._conn_state[2] if self._conn_state and self._conn_state[0] else None
         messagebox.showinfo("Über ALLES", (
             f"ALLES {__version__}\n"
-            "Ein freundliches Front-End für Everything von voidtools.\n\n"
-            f"Everything: {'.'.join(map(str, ver)) if ver else 'nicht verbunden'}\n"
+            "Blitzschnelle Dateisuche für Windows – mit Everything oder dem eigenen Index.\n\n"
+            f"Suchmodus: {self.backend.label if self.backend else '-'}\n"
             f"Konfiguration: {cfgmod.CONFIG_FILE}\n\n"
-            "ALLES ist kein offizielles voidtools-Produkt."), parent=self.root)
-
-
-class SettingsDialog(tk.Toplevel):
-    def __init__(self, app: AllesApp):
-        super().__init__(app.root)
-        self.app = app
-        self.title("ALLES Einstellungen")
-        self.resizable(False, False)
-        self.transient(app.root)
-        self.new_combo = None
-        self._capturing = False
-        icon = win_style.app_icon_path()
-        if icon:
-            try:
-                self.iconbitmap(icon)
-            except tk.TclError:
-                pass
-
-        frm = ttk.Frame(self, padding=14)
-        frm.pack(fill=tk.BOTH, expand=True)
-        frm.columnconfigure(0, weight=1)
-        row = 0
-
-        ttk.Label(frm, text="Globaler Hotkey (Fenster ein-/ausblenden):").grid(
-            row=row, column=0, columnspan=2, sticky=tk.W)
-        row += 1
-        self.hotkey_var = tk.StringVar(value=self._combo_text())
-        self.hk_entry = ttk.Entry(frm, textvariable=self.hotkey_var, width=30, state="readonly")
-        self.hk_entry.grid(row=row, column=0, sticky=tk.EW, pady=(2, 10))
-        self.hk_entry.bind("<KeyPress>", self._on_key)
-        self.capture_btn = ttk.Button(frm, text="Aufzeichnen...", command=self._toggle_capture)
-        self.capture_btn.grid(row=row, column=1, padx=(6, 0), pady=(2, 10))
-        row += 1
-
-        ttk.Label(frm, text="Treffer pro Seite:").grid(row=row, column=0, sticky=tk.W)
-        row += 1
-        self.max_var = tk.StringVar(value=str(app.max_display))
-        ttk.Spinbox(frm, from_=cfgmod.MIN_MAX_DISPLAY, to=50_000, increment=500,
-                    textvariable=self.max_var, width=10).grid(
-            row=row, column=0, sticky=tk.W, pady=(2, 10))
-        row += 1
-
-        ttk.Label(frm, text="Everything.exe (leer = automatisch suchen):").grid(
-            row=row, column=0, columnspan=2, sticky=tk.W)
-        row += 1
-        self.exe_var = tk.StringVar(value=app.cfg.get("everything_exe", ""))
-        ttk.Entry(frm, textvariable=self.exe_var, width=46).grid(
-            row=row, column=0, sticky=tk.EW, pady=(2, 10))
-        ttk.Button(frm, text="Durchsuchen...", command=self._browse_exe).grid(
-            row=row, column=1, padx=(6, 0), pady=(2, 10))
-        row += 1
-
-        self.auto_var = tk.BooleanVar(value=app.auto_repair)
-        self.tray_var = tk.BooleanVar(value=app.close_to_tray)
-        self.autostart_var = tk.BooleanVar(value=shell.get_autostart())
-        for text, var in (("Everything bei Bedarf automatisch starten", self.auto_var),
-                          ("Schließen-Knopf minimiert in den Tray", self.tray_var),
-                          ("ALLES mit Windows starten (im Tray)", self.autostart_var)):
-            ttk.Checkbutton(frm, text=text, variable=var).grid(
-                row=row, column=0, columnspan=2, sticky=tk.W, pady=1)
-            row += 1
-
-        btns = ttk.Frame(frm)
-        btns.grid(row=row, column=0, columnspan=2, sticky=tk.E, pady=(14, 0))
-        ttk.Button(btns, text="Speichern", command=self._save).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btns, text="Abbrechen", command=self.destroy).pack(side=tk.LEFT)
-        self.bind("<Escape>", lambda e: self._escape())
-        self.bind("<Return>", lambda e: None if self._capturing else self._save())
-
-        self.update_idletasks()
-        x = app.root.winfo_rootx() + (app.root.winfo_width() - self.winfo_reqwidth()) // 2
-        y = app.root.winfo_rooty() + 80
-        self.geometry(f"+{max(0, x)}+{max(0, y)}")
-        self.grab_set()
-        self.focus_set()
-
-    def _combo_text(self):
-        combo = self.app.tray.hotkey_combo if self.app.tray else None
-        return vk_display(*combo) if combo else "(keiner)"
-
-    def _escape(self):
-        if self._capturing:
-            self._toggle_capture()
-        else:
-            self.destroy()
-
-    def _toggle_capture(self):
-        self._capturing = not self._capturing
-        if self._capturing:
-            self.hotkey_var.set("Tastenkombination drücken (z.B. Strg+Alt+Leertaste)...")
-            self.capture_btn.configure(text="Abbrechen")
-            self.hk_entry.focus_set()
-        else:
-            self.hotkey_var.set(vk_display(*self.new_combo) if self.new_combo
-                                else self._combo_text())
-            self.capture_btn.configure(text="Aufzeichnen...")
-
-    def _on_key(self, event):
-        if not self._capturing:
-            return None
-        vk = int(event.keycode)
-        if vk in MODIFIER_VKS:
-            return "break"
-        if vk == 0x1B:  # Esc cancels
-            self._toggle_capture()
-            return "break"
-        gks = _user32.GetAsyncKeyState
-        down = lambda k: bool(gks(k) & 0x8000)  # noqa: E731
-        mods = 0
-        if down(0x11):
-            mods |= MOD_CONTROL
-        if down(0x12):
-            mods |= MOD_ALT
-        if down(0x10):
-            mods |= MOD_SHIFT
-        if down(0x5B) or down(0x5C):
-            mods |= MOD_WIN
-        if not is_valid_hotkey(mods, vk):
-            self.hotkey_var.set("Bitte mit Strg, Alt oder Win kombinieren...")
-            return "break"
-        self.new_combo = (mods, vk)
-        self._capturing = False
-        self.hotkey_var.set(vk_display(*self.new_combo))
-        self.capture_btn.configure(text="Aufzeichnen...")
-        return "break"
-
-    def _browse_exe(self):
-        path = filedialog.askopenfilename(parent=self, title="Everything.exe auswählen",
-                                          filetypes=[("Everything", "Everything*.exe"),
-                                                     ("Programme", "*.exe")])
-        if path:
-            self.exe_var.set(os.path.normpath(path))
-
-    def _save(self):
-        app = self.app
-        exe = self.exe_var.get().strip()
-        if exe and not os.path.isfile(exe):
-            messagebox.showerror("ALLES", f"Datei nicht gefunden:\n{exe}", parent=self)
-            return
-        app.max_display = cfgmod.clamp_int(self.max_var.get(), app.max_display,
-                                           cfgmod.MIN_MAX_DISPLAY, cfgmod.MAX_MAX_DISPLAY)
-        app.auto_repair = bool(self.auto_var.get())
-        app.close_to_tray = bool(self.tray_var.get())
-        if exe:
-            app.cfg["everything_exe"] = exe
-        else:
-            app.cfg.pop("everything_exe", None)
-        if self.new_combo:
-            app.cfg["hotkey_mod"], app.cfg["hotkey_vk"] = self.new_combo
-            if app.tray:
-                app.tray.request_reregister(self.new_combo)
-        if (self.autostart_var.get() != shell.get_autostart()
-                and not shell.set_autostart(self.autostart_var.get())):
-            messagebox.showwarning("ALLES", "Autostart konnte nicht geändert werden.",
-                                   parent=self)
-        app.save_config()
-        app.set_status("Einstellungen gespeichert.", "ok")
-        self.destroy()
+            "MIT-Lizenz · github.com/theStxve/alles\n"
+            "„Everything“ ist ein Produkt von voidtools. ALLES ist kein offizielles "
+            "voidtools-Produkt."), parent=self.root)
 
 
 # ---------------------------------------------------------------------- entry point
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(prog="alles", description=APP_TITLE)
+    p = argparse.ArgumentParser(prog="alles", description=WINDOW_TITLE)
     p.add_argument("--tray", action="store_true", help="versteckt im Tray starten")
     p.add_argument("--search", default="", help="mit diesem Suchbegriff starten")
+    p.add_argument("--folder", default="", help="in diesem Ordner suchen")
+    p.add_argument("--uninstall-cleanup", action="store_true",
+                   help="Autostart und Explorer-Menü entfernen (für den Uninstaller)")
     p.add_argument("--version", action="version", version=f"ALLES {__version__}")
     return p.parse_args(argv)
 
@@ -1277,7 +1438,7 @@ def parse_args(argv=None):
 _mutex_handle = None  # keep the single-instance mutex alive for the process lifetime
 
 
-def acquire_single_instance() -> bool:
+def acquire_single_instance(payload: str | None) -> bool:
     """True if we are the first instance. Otherwise the running one is activated."""
     global _mutex_handle
     from . import tray
@@ -1285,8 +1446,8 @@ def acquire_single_instance() -> bool:
     k32.CreateMutexW.restype = ctypes.c_void_p
     _mutex_handle = k32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        for _ in range(20):  # the other instance may still be starting up
-            if tray.signal_existing_instance():
+        for _ in range(30):  # the other instance may still be starting up
+            if tray.signal_existing_instance(payload):
                 break
             time.sleep(0.1)
         return False
@@ -1295,8 +1456,12 @@ def acquire_single_instance() -> bool:
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.uninstall_cleanup:
+        shell.remove_integrations()
+        return 0
     win_style.hide_own_console()
-    if not acquire_single_instance():
+    remote = {k: v for k, v in (("folder", args.folder), ("search", args.search)) if v}
+    if not acquire_single_instance(json.dumps(remote) if remote else None):
         return 0
     log_path = setup_logging()
     log.info("ALLES %s starting (log: %s)", __version__, log_path)
@@ -1305,7 +1470,7 @@ def main(argv=None):
 
     from . import tray as tray_mod
 
-    root = tk.Tk()
+    root = tk.Tk(className="ALLES")
     icon = win_style.app_icon_path()
     if icon:
         try:
@@ -1315,6 +1480,8 @@ def main(argv=None):
 
     cfg = cfgmod.load_config()
     app = AllesApp(root, cfg, start_hidden=args.tray, initial_text=args.search)
+    if args.folder:
+        app.handle_args({"folder": args.folder})
 
     preferred = None
     if "hotkey_mod" in cfg and "hotkey_vk" in cfg:
@@ -1325,7 +1492,8 @@ def main(argv=None):
     tray = tray_mod.TrayHotkey(app.dispatch, app.toggle_window, app.show_window, app.quit,
                                on_hotkey_changed=app.on_hotkey_changed,
                                preferred_combo=preferred, icon_path=icon,
-                               tooltip=f"ALLES {__version__} - Everything Front-End")
+                               tooltip=f"ALLES {__version__} – Dateisuche",
+                               on_message=app.on_remote_message)
     app.tray = tray
     if not tray.start():
         log.warning("tray icon could not be created")

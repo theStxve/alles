@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.1.0] – 2026-11-07
+
+### Neu
+- **Eigener Index – ALLES funktioniert jetzt komplett ohne Everything.** SQLite-Index,
+  eingelesen per `os.scandir` ohne Adminrechte, live aktualisiert über `ReadDirectoryChangesW`,
+  beim Start im Hintergrund aufgefrischt. Er versteht dieselbe Suchsyntax wie Everything
+  (`ext:`, `size:`, `dm:`, `path:`, `parent:`, `regex:`, `< | ! >`, Platzhalter).
+  Gemessen: 2 Mio. Einträge in 44 s eingelesen, typische Suchen 10–200 ms.
+- Suchmodus wählbar: Automatisch / Everything / Eigener Index
+- **Vorschau-Panel** mit Explorer-Thumbnails (Bilder, Videos, PDFs …) und Textinhalt
+- **Duplikat-Finder** (Inhalt per Hash oder Name+Größe), ältere Kopien markieren, Papierkorb
+- **Filter-Presets**: eingebaute Vorlagen plus eigene gespeicherte Filter
+- **Ordner ausschließen** (Standard: `WinSxS`, `node_modules`, `.git`, `__pycache__`)
+- **Dark Mode** (folgt Windows, inklusive dunkler Titelleisten), eigene Menüleiste
+- **Explorer-Kontextmenü** „Mit ALLES durchsuchen“, `--folder`, Übergabe an die laufende Instanz
+- Echte Datei-Icons und Windows-Typnamen in der Ergebnisliste
+- Papierkorb (Entf), „Öffnen mit…“, „Terminal hier“, „In VS Code öffnen“
+- **Installer** (Inno Setup, ohne Adminrechte), **portable ZIP**, portabler Modus (`ALLES-Daten`)
+- Neues App-Icon, EXE-Versionsinfos, CI testet den Installer per Test-Installation
+
+### Behoben
+- Auf Laufwerken ohne Papierkorb warnt Windows jetzt vor endgültigem Löschen.
+- Autostart- und Explorer-Befehle funktionieren auch beim Start aus dem Quellcode.
+
 ## [2.0.0] – 2026-11-07
 
 Kompletter Umbau zu einem Python-Paket mit Tests, CI und automatischen Releases.

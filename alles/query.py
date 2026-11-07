@@ -70,6 +70,20 @@ COLUMN_SORTS: dict[str, tuple[str, str]] = {
 
 DEFAULT_SORT = "Name (A-Z)"
 
+DEFAULT_EXCLUDES = ["C:\\Windows\\WinSxS", "node_modules", ".git", "__pycache__"]
+
+# Built-in filter presets (users can save their own on top)
+BUILTIN_PRESETS: dict[str, dict] = {
+    "Große Dateien (> 1 GB)": {"type": "Nur Dateien", "size": "> 1 GB", "date": "Egal",
+                               "sort": "Größe (ab)"},
+    "Heute geändert": {"type": "Alles", "size": "Egal", "date": "Heute",
+                       "sort": "Geändert (ab)"},
+    "Fotos dieses Jahr": {"type": "Bilder", "size": "Egal", "date": "Dieses Jahr",
+                          "sort": "Geändert (ab)"},
+    "Leere Dateien": {"type": "Nur Dateien", "size": "Leer (0 B)", "date": "Egal",
+                      "sort": "Pfad (A-Z)"},
+}
+
 
 @dataclass
 class SearchOptions:
@@ -121,7 +135,21 @@ def drive_scope(drives: list[str]) -> str:
     return "<" + " | ".join(roots) + ">"
 
 
-def build_query(opts: SearchOptions) -> Query:
+def exclusion_terms(excludes) -> list[str]:
+    r"""Hide the contents of excluded folders: 'node_modules' -> !"\node_modules\"."""
+    from .index.store import classify_exclude  # same rules as the built-in index
+
+    terms = []
+    for raw in excludes or ():
+        kind, e = classify_exclude(raw)
+        if kind == "abs":  # that folder
+            terms.append(f'!"{e}\\"')
+        elif kind in ("name", "fragment"):  # folder name / path fragment anywhere
+            terms.append(f'!"\\{e}\\"')
+    return terms
+
+
+def build_query(opts: SearchOptions, excludes=()) -> Query:
     """Return the Everything query for the given UI options."""
     parts: list[str] = []
 
@@ -143,6 +171,8 @@ def build_query(opts: SearchOptions) -> Query:
         # the generated filters (ext:, size:, ...). The regex: modifier only
         # applies to the user's text.
         parts.append("regex:" + _quote(text) if opts.regex else text)
+
+    parts += exclusion_terms(excludes)
 
     return Query(
         search=" ".join(parts),

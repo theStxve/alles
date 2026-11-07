@@ -87,3 +87,21 @@ def test_preset_values_have_no_spaces(table):
 def test_column_sorts_reference_existing_options():
     for asc, desc in COLUMN_SORTS.values():
         assert asc in SORT_OPTIONS and desc in SORT_OPTIONS
+
+
+def test_exclusion_terms():
+    from alles.query import exclusion_terms
+    assert exclusion_terms(["node_modules", "C:\\Windows\\WinSxS\\", " ", 'x"y']) == [
+        r'!"\node_modules\"', r'!"C:\Windows\WinSxS\"']
+
+
+def test_build_query_appends_exclusions():
+    q = build_query(SearchOptions(text="app"), excludes=[".git"])
+    assert q.search == r'app !"\.git\"'
+
+
+def test_builtin_presets_use_valid_values():
+    from alles.query import BUILTIN_PRESETS
+    for preset in BUILTIN_PRESETS.values():
+        assert preset["type"] in TYPE_PRESETS and preset["size"] in SIZE_PRESETS
+        assert preset["date"] in DATE_PRESETS and preset["sort"] in SORT_OPTIONS

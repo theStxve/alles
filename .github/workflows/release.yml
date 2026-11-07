@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v2.0.0 to build ALLES.exe and attach it to a GitHub release.
+# Push a tag like v2.1.0 to build the installer, the portable zip and the plain
+# exe and attach them (plus SHA-256 checksums) to a GitHub release.
 on:
   push:
     tags: ["v*"]
@@ -17,7 +18,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tools
-        run: python -m pip install --upgrade pip pyinstaller pytest
+        run: |
+          python -m pip install --upgrade pip pyinstaller pytest
+          choco install innosetup --no-progress -y
       - name: Test
         run: python -m pytest -q
       - name: Check tag matches version
@@ -25,19 +28,24 @@ jobs:
         run: |
           VERSION=$(python -c "import alles; print(alles.__version__)")
           [ "v$VERSION" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} != v$VERSION"; exit 1; }
-      - name: Fetch Everything SDK
-        run: python scripts/fetch_sdk.py
-      - name: Build exe
-        run: python -m PyInstaller ALLES.spec --noconfirm --clean
-      - name: Checksum
+      - name: Build
+        shell: pwsh
+        run: ./scripts/build.ps1
+      - name: Installer smoke test
+        shell: pwsh
+        run: ./scripts/test_installer.ps1
+      - name: Rename and checksum
         shell: bash
         run: |
           cd dist
-          mv ALLES.exe "ALLES-${GITHUB_REF_NAME}.exe"
-          sha256sum "ALLES-${GITHUB_REF_NAME}.exe" > "ALLES-${GITHUB_REF_NAME}.exe.sha256"
+          mv ALLES.exe "ALLES-${GITHUB_REF_NAME#v}-x64.exe"
+          sha256sum ALLES-*.exe ALLES-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ALLES-*.exe
-            dist/ALLES-*.exe.sha256
+            dist/ALLES-Setup-*.exe
+            dist/ALLES-*-portable.zip
+            dist/ALLES-*-x64.exe
+            dist/SHA256SUMS.txt
           generate_release_notes: true

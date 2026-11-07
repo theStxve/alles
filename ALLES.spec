@@ -16,7 +16,8 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=[],
-    excludes=["PIL", "numpy", "pytest", "unittest", "pydoc", "test"],
+    excludes=["PIL", "numpy", "pytest", "unittest", "pydoc", "test", "pygame", "psutil",
+              "matplotlib", "pandas", "scipy", "IPython"],
     noarchive=False,
     optimize=1,
 )

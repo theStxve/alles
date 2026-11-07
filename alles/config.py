@@ -3,10 +3,29 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 
 APP_NAME = "ALLES"
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), APP_NAME)
+PORTABLE_DIR_NAME = "ALLES-Daten"
+
+
+def _portable_dir() -> str | None:
+    """Portable mode: $ALLES_HOME, or an 'ALLES-Daten' folder next to the program."""
+    env = os.environ.get("ALLES_HOME")
+    if env:
+        return os.path.abspath(env)
+    base = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False)
+                                           else sys.argv[0] or "."))
+    candidate = os.path.join(base, PORTABLE_DIR_NAME)
+    return candidate if os.path.isdir(candidate) else None
+
+
+PORTABLE_DIR = _portable_dir()
+CONFIG_DIR = PORTABLE_DIR or os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~"), APP_NAME)
+DATA_DIR = PORTABLE_DIR or os.path.join(
+    os.environ.get("LOCALAPPDATA") or CONFIG_DIR, APP_NAME)  # big files (search index)
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULT_MAX_DISPLAY = 2000
