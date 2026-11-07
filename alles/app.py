@@ -118,6 +118,8 @@ class AllesApp:
         self._req_cond = threading.Condition()
         self._pending: SearchRequest | None = None
         self._rows: list[Row] = []
+        self._has_more = False
+        self._loading_more = False
         self._last_query: Query | None = None
         self._last_start_attempt = 0.0
         self._status: Status | None = None
@@ -374,8 +376,6 @@ class AllesApp:
         self.status_dot.pack(side=tk.LEFT)
         self.status_label = ttk.Label(status, textvariable=self.v_status, anchor=tk.W)
         self.status_label.pack(side=tk.LEFT, padx=(6, 0), fill=tk.X, expand=True)
-        self.more_btn = ttk.Button(status, text="Weitere laden",
-                                   command=lambda: self.run_search(append=True))
         self.update_btn = ttk.Button(status, text="Update verfügbar",
                                      command=lambda: self.open_update_dialog())
         self.status_label.bind("<Enter>", self._show_status_tip)
@@ -402,7 +402,8 @@ class AllesApp:
             self.tree.column(key, width=w, anchor=anchor, stretch=key == "folder")
         vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.vsb = vsb
+        self.tree.configure(yscrollcommand=self._on_tree_scroll, xscrollcommand=hsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
@@ -807,6 +808,7 @@ class AllesApp:
             self._req_cond.notify()
         if not append:
             self._last_query = q
+            self._has_more = False  # no paging on old rows while the new search runs
 
     def _search_worker(self):
         from . import thumbs
@@ -865,9 +867,17 @@ class AllesApp:
         return self._type_names.get(key) or ("Ordner" if row.is_dir else
                                              (row.ext.upper() + "-Datei" if row.ext else "Datei"))
 
+    def _on_tree_scroll(self, first, last):
+        """Infinite scrolling: fetch the next page when the end comes into view."""
+        self.vsb.set(first, last)
+        if self._has_more and not self._loading_more and float(last) >= 0.9:
+            self._loading_more = True
+            self.run_search(append=True)
+
     def _on_search_done(self, req: SearchRequest, result):
         if req.gen != self._gen:
             return
+        self._loading_more = False
         if isinstance(result, Exception):
             self.set_status(str(result), "err")
             if self.backend is self.everything:
@@ -886,15 +896,13 @@ class AllesApp:
                              tags=("dir",) if row.is_dir else ())
         self._rows.extend(result.rows)
         shown = len(self._rows)
-        more = result.total > shown
-        if more:
-            self.more_btn.pack(side=tk.RIGHT)
-        else:
-            self.more_btn.pack_forget()
+        more = result.total > shown and bool(result.rows)
+        self._has_more = more
+        self._loading_more = False
         total = fmt_count(result.total) + ("+" if result.capped else "")
         text = f"{total} Treffer"
         if more:
-            text += f" ({fmt_count(shown)} angezeigt)"
+            text += f" ({fmt_count(shown)} geladen, mehr beim Scrollen)"
         self.set_status(f"{text}  ·  {result.elapsed_ms:.0f} ms  ·  {self.backend.label}",
                         "ok" if result.total else "info")
         if not req.append:
