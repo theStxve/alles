@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.1.0] – 2026-11-07
+## [2.1.0] – 2026-11-08
 
 ### Neu
 - **Eigener Index – ALLES funktioniert jetzt komplett ohne Everything.** SQLite-Index,
