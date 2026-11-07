@@ -24,7 +24,7 @@ _lang = LANG_DE
 
 KEY_NAMES = {"Strg": "Ctrl", "Umschalt": "Shift", "Entf": "Del", "Leertaste": "Space",
              "Pos1": "Home", "Ende": "End", "Einfg": "Ins", "Bild↑": "PgUp", "Bild↓": "PgDn",
-             "Rücktaste": "Backspace"}
+             "Rücktaste": "Backspace", "Rechtsklick": "Right-click"}
 
 CATALOG: dict[str, str] = {
     # --- window, menus
@@ -60,6 +60,9 @@ CATALOG: dict[str, str] = {
     "Verschieben nach": "Move to", "Umbenennen": "Rename",
     "In diesem Ordner suchen": "Search in this folder", "Eigenschaften": "Properties",
     "In den Papierkorb": "Move to recycle bin", "Ordner wählen…": "Choose folder…",
+    "Windows-Kontextmenü…": "Windows context menu…",
+    "Windows-Kontextmenü nicht verfügbar: {0}": "Windows context menu not available: {0}",
+    "F2": "F2", "Rechtsklick": "right click",
     # --- presets / filters (display only - stored values stay German)
     "Alles": "Everything", "Nur Dateien": "Files only", "Nur Ordner": "Folders only",
     "Dokumente": "Documents", "Bilder": "Pictures", "Videos": "Videos", "Musik": "Music",

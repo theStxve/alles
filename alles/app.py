@@ -455,6 +455,8 @@ class AllesApp:
         c.add_command(label="In diesem Ordner suchen", command=self.search_in_folder)
         c.add_command(label="Eigenschaften", accelerator="Alt+Enter",
                       command=self.properties_selected)
+        c.add_command(label="Windows-Kontextmenü…", accelerator="Umschalt+Rechtsklick",
+                      command=lambda: self.root.after(50, self.native_menu))
         c.add_separator()
         c.add_command(label="In den Papierkorb", accelerator="Entf",
                       command=self.recycle_selected)
@@ -1360,7 +1362,38 @@ class AllesApp:
         if item not in self.tree.selection():
             self.tree.selection_set(item)
         self.tree.focus(item)
-        self.ctx.tk_popup(event.x_root, event.y_root)
+        if event.state & 0x0001:  # Shift+right click -> the real Explorer menu (extended)
+            self.root.after(1, lambda: self.native_menu(event.x_root, event.y_root, True))
+        else:
+            self.ctx.tk_popup(event.x_root, event.y_root)
+
+    def native_menu(self, x: int | None = None, y: int | None = None, extended=False):
+        """Windows' own context menu (7-Zip, Git, 'Send to', ...) for the selection."""
+        from . import shellmenu
+        rows = self.selected_rows()
+        if not rows:
+            return
+        if x is None:
+            x, y = self.root.winfo_pointerxy()
+
+        def own_verbs(verb: str) -> bool:
+            if verb == "rename":  # needs an Explorer view - use ALLES' F2 dialog instead
+                self.root.after(1, self.rename_selected)
+                return True
+            return False
+
+        try:
+            verb = shellmenu.show([r.path for r in rows], x, y, extended, own_verbs)
+        except OSError as exc:
+            self.set_status(f"Windows-Kontextmenü nicht verfügbar: {exc}", "err")
+            return
+        if verb in ("delete", "cut", "wforcedelete"):
+            self.root.after(1500, self._drop_missing_rows)
+
+    def _drop_missing_rows(self):
+        for iid in list(self.tree.get_children()):
+            if not os.path.exists(self._rows[int(iid)].path):
+                self.tree.delete(iid)
 
     def clear_search(self):
         self.v_text.set("")
