@@ -84,11 +84,13 @@ class SettingsDialog(tk.Toplevel):
         self.autostart_var = tk.BooleanVar(value=shell.get_autostart())
         self.explorer_var = tk.BooleanVar(value=shell.get_explorer_integration())
         self.labels_var = tk.BooleanVar(value=cfg.get("show_drive_labels", True))
+        self.update_var = tk.BooleanVar(value=app.auto_update)
         for i, (text, var) in enumerate((
                 ("Schließen-Knopf minimiert in den Tray", self.tray_var),
                 ("ALLES mit Windows starten (im Tray)", self.autostart_var),
                 ("„Mit ALLES durchsuchen“ im Explorer-Kontextmenü", self.explorer_var),
-                ("Laufwerksnamen anzeigen", self.labels_var))):
+                ("Laufwerksnamen anzeigen", self.labels_var),
+                ("Automatisch nach Updates suchen (einmal täglich)", self.update_var))):
             ttk.Checkbutton(g, text=text, variable=var).grid(row=6 + i, column=0, columnspan=2,
                                                              sticky="w", pady=1)
 
@@ -267,7 +269,7 @@ class SettingsDialog(tk.Toplevel):
             "show_drive_labels": self.labels_var.get(), "theme": theme, "backend": backend,
             "excludes": excludes, "everything_exe": exe, "auto_repair": self.auto_var.get(),
             "index_roots": roots, "index_refresh_minutes": self.refresh_var.get(),
-            "hotkey": self.new_combo,
+            "hotkey": self.new_combo, "auto_update": self.update_var.get(),
         })
         self.destroy()
 
@@ -435,3 +437,117 @@ class DuplicatesDialog(tk.Toplevel):
         else:
             messagebox.showerror("ALLES", "Nicht alle Dateien konnten verschoben werden.",
                                  parent=self)
+
+
+class UpdateDialog(tk.Toplevel):
+    """Shows release notes and installs the update (download + verify + swap/setup)."""
+
+    def __init__(self, app: AllesApp, release):
+        from . import __version__, update
+        super().__init__(app.root)
+        self.app = app
+        self.release = release
+        self._upd = update
+        self.kind = update.install_kind()
+        self._stop = threading.Event()
+        self.title("Update verfügbar")
+        self.transient(app.root)
+        self.resizable(False, False)
+        theme.style_toplevel(self, app.palette)
+
+        frm = ttk.Frame(self, padding=16)
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text=f"ALLES {release.version} ist verfügbar",
+                  font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        ttk.Label(frm, text=f"Installiert: {__version__}", style="Hint.TLabel").pack(
+            anchor="w", pady=(2, 10))
+        notes = tk.Text(frm, width=70, height=14, wrap="word", relief="flat",
+                        highlightthickness=1, bg=app.palette["field"], fg=app.palette["fg"],
+                        highlightbackground=app.palette["border"], padx=8, pady=6)
+        notes.insert("1.0", release.notes[:6000] or "Keine Versionshinweise.")
+        notes.configure(state="disabled")
+        notes.pack(fill=tk.BOTH, expand=True)
+        self.progress = ttk.Progressbar(frm, mode="determinate", maximum=100)
+        self.status = tk.StringVar(value=self._kind_text())
+        ttk.Label(frm, textvariable=self.status, style="Hint.TLabel", wraplength=520).pack(
+            anchor="w", pady=(10, 0))
+        btns = ttk.Frame(frm)
+        btns.pack(fill=tk.X, pady=(12, 0))
+        self.later_btn = ttk.Button(btns, text="Später", command=self._close)
+        self.later_btn.pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Diese Version überspringen", command=self._skip).pack(
+            side=tk.RIGHT, padx=6)
+        label = "Zur Download-Seite" if self.kind == update.KIND_SOURCE else "Jetzt aktualisieren"
+        self.go_btn = ttk.Button(btns, text=label, command=self._go)
+        self.go_btn.pack(side=tk.LEFT)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        _center(self, app.root, 60)
+        self.grab_set()
+
+    def _kind_text(self):
+        u = self._upd
+        return {u.KIND_INSTALLER: "Der neue Installer wird geladen, geprüft und still "
+                                  "ausgeführt. ALLES startet danach automatisch neu.",
+                u.KIND_PORTABLE: "Die neue Version wird geladen, geprüft und ersetzt die "
+                                 "portable EXE. Deine Daten bleiben erhalten.",
+                u.KIND_EXE: "Die neue Version wird geladen, geprüft und ersetzt diese EXE.",
+                u.KIND_SOURCE: "Du nutzt ALLES aus dem Quellcode – aktualisiere mit "
+                               "„git pull“ oder lade die neue Version herunter.",
+                }[self.kind]
+
+    def _close(self):
+        self._stop.set()
+        self.destroy()
+
+    def _skip(self):
+        self.app.cfg["update_skip"] = self.release.version
+        self.app.save_config()
+        self.app.update_btn.pack_forget()
+        self.destroy()
+
+    def _go(self):
+        u = self._upd
+        if self.kind == u.KIND_SOURCE:
+            os.startfile(self.release.page)
+            self.destroy()
+            return
+        asset = u.pick_asset(self.release, self.kind)
+        if not asset:
+            messagebox.showerror("Update", "Im Release fehlt die passende Datei.", parent=self)
+            return
+        self.go_btn.state(["disabled"])
+        self.progress.pack(fill=tk.X, pady=(10, 0))
+        self.status.set(f"Lade {asset} …")
+
+        def progress(done, total):
+            if total:
+                self.app.dispatch(self.progress.configure, {"value": done * 100 / total})
+
+        def work():
+            try:
+                path = u.download(self.release, asset, progress, self._stop.is_set)
+                self.app.dispatch(self._install, path)
+            except u.UpdateError as exc:
+                self.app.dispatch(self._failed, str(exc))
+            except OSError as exc:
+                self.app.dispatch(self._failed, f"Download fehlgeschlagen: {exc}")
+
+        threading.Thread(target=work, name="update-download", daemon=True).start()
+
+    def _failed(self, message):
+        if self.winfo_exists():
+            self.status.set(message)
+            self.go_btn.state(["!disabled"])
+
+    def _install(self, path):
+        u = self._upd
+        self.status.set("Installiere Update …")
+        try:
+            if self.kind == u.KIND_INSTALLER:
+                u.apply_installer(path, os.getpid())
+            else:
+                u.apply_exe(path, restart_args=["--wait-pid", str(os.getpid())])
+        except OSError as exc:
+            self._failed(f"Update konnte nicht installiert werden: {exc}")
+            return
+        self.app.quit()

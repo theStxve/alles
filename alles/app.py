@@ -134,6 +134,8 @@ class AllesApp:
         self.excludes: list[str] = list(cfg.get("excludes", DEFAULT_EXCLUDES))
         self.index_roots: list[str] = list(cfg.get("index_roots") or shell.fixed_drives())
         self.presets: dict[str, dict] = dict(cfg.get("presets") or {})
+        self.auto_update = bool(cfg.get("auto_update", True))
+        self.available_update = None  # update.Release once a newer version was found
 
         f = cfg.get("filters") if isinstance(cfg.get("filters"), dict) else {}
 
@@ -182,6 +184,7 @@ class AllesApp:
         self._pump()
         self._select_backend()
         threading.Thread(target=self._watchdog_loop, name="watchdog", daemon=True).start()
+        root.after(8000, self._maybe_check_update)
         if start_hidden:
             root.withdraw()
         else:
@@ -289,6 +292,8 @@ class AllesApp:
         m.add_command(label="Tastenkürzel", accelerator="F1", command=self.show_shortcuts)
         m.add_command(label="Suchsyntax", command=self.show_syntax_help)
         m.add_separator()
+        m.add_command(label="Nach Updates suchen…",
+                      command=lambda: self.check_for_update(manual=True))
         m.add_command(label="Projektseite auf GitHub",
                       command=lambda: os.startfile("https://github.com/theStxve/alles"))
         m.add_command(label="Über ALLES", command=self.show_about)
@@ -363,6 +368,8 @@ class AllesApp:
         self.status_label.pack(side=tk.LEFT, padx=(6, 0), fill=tk.X, expand=True)
         self.more_btn = ttk.Button(status, text="Weitere laden",
                                    command=lambda: self.run_search(append=True))
+        self.update_btn = ttk.Button(status, text="Update verfügbar",
+                                     command=lambda: self.open_update_dialog())
         self.status_label.bind("<Enter>", self._show_status_tip)
         self.status_label.bind("<Leave>", self._hide_status_tip)
 
@@ -1296,6 +1303,7 @@ class AllesApp:
                                             cfgmod.MIN_MAX_DISPLAY, cfgmod.MAX_MAX_DISPLAY)
         self.close_to_tray = bool(s["close_to_tray"])
         self.auto_repair = bool(s["auto_repair"])
+        self.auto_update = bool(s.get("auto_update", True))
         if s["everything_exe"]:
             cfg["everything_exe"] = s["everything_exe"]
         else:
@@ -1334,6 +1342,7 @@ class AllesApp:
             "close_to_tray": self.close_to_tray, "history": self.history,
             "excludes": self.excludes, "index_roots": self.index_roots,
             "presets": self.presets, "preview": self.v_preview.get(),
+            "auto_update": self.auto_update,
             "columns": {"name": self.tree.column("#0", "width"),
                         **{k: self.tree.column(k, "width") for k, *_ in COLUMNS}},
             "filters": self.current_filters(),
@@ -1357,6 +1366,55 @@ class AllesApp:
         self.root.destroy()
 
     # ------------------------------------------------------------------ dialogs
+    # ------------------------------------------------------------------ updates
+    def _maybe_check_update(self):
+        last = float(self.cfg.get("update_checked_at", 0) or 0)
+        if self.auto_update and time.time() - last > 24 * 3600:
+            self.check_for_update(manual=False)
+
+    def check_for_update(self, manual: bool = False):
+        from . import update
+        if manual:
+            self.set_status("Suche nach Updates…", "info")
+
+        def work():
+            try:
+                result = update.fetch_latest()
+            except update.UpdateError as exc:
+                result = exc
+            self.dispatch(self._on_update_result, result, manual)
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def _on_update_result(self, result, manual: bool):
+        from . import update
+        if isinstance(result, Exception):
+            log.info("update check failed: %s", result)
+            if manual:
+                messagebox.showwarning("Updates", f"Update-Prüfung fehlgeschlagen:\n{result}",
+                                       parent=self.root)
+            return
+        self.cfg["update_checked_at"] = time.time()
+        self.save_config()
+        newer = update.is_newer(result.version)
+        skipped = self.cfg.get("update_skip") == result.version
+        log.info("update check: latest %s (newer=%s)", result.version, newer)
+        if newer and (manual or not skipped):
+            self.available_update = result
+            self.update_btn.configure(text=f"Update auf {result.version}")
+            self.update_btn.pack(side=tk.RIGHT, padx=(6, 0))
+            if manual:
+                self.open_update_dialog()
+        elif manual:
+            messagebox.showinfo("Updates", f"ALLES {__version__} ist aktuell.", parent=self.root)
+            self.set_status("ALLES ist aktuell.", "ok")
+
+    def open_update_dialog(self):
+        if self.available_update is None:
+            return
+        from .dialogs import UpdateDialog
+        UpdateDialog(self, self.available_update)
+
     def open_settings(self, tab: int = 0):
         from .dialogs import SettingsDialog
         SettingsDialog(self, tab)
@@ -1431,8 +1489,21 @@ def parse_args(argv=None):
     p.add_argument("--folder", default="", help="in diesem Ordner suchen")
     p.add_argument("--uninstall-cleanup", action="store_true",
                    help="Autostart und Explorer-Menü entfernen (für den Uninstaller)")
+    p.add_argument("--wait-pid", type=int, default=0, help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version=f"ALLES {__version__}")
     return p.parse_args(argv)
+
+
+def wait_for_process(pid: int, timeout_ms: int = 20_000) -> None:
+    """After a self-update the new exe waits until the old process has exited."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if handle:
+        k32.WaitForSingleObject(handle, timeout_ms)
+        k32.CloseHandle(handle)
 
 
 _mutex_handle = None  # keep the single-instance mutex alive for the process lifetime
@@ -1460,6 +1531,10 @@ def main(argv=None):
         shell.remove_integrations()
         return 0
     win_style.hide_own_console()
+    if args.wait_pid:
+        wait_for_process(args.wait_pid)
+    from . import update
+    update.cleanup_old_versions()
     remote = {k: v for k, v in (("folder", args.folder), ("search", args.search)) if v}
     if not acquire_single_instance(json.dumps(remote) if remote else None):
         return 0

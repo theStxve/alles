@@ -47,3 +47,4 @@ ignore = ["SIM105", "SIM108"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["network: needs internet access (skipped when offline)"]
