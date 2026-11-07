@@ -13,6 +13,7 @@ from . import config as cfgmod
 from . import shell, theme
 from .backends import BACKEND_LABELS
 from .dupes import MODE_CONTENT, MODE_NAME_SIZE, find_duplicates, wasted_bytes
+from .i18n import LANGUAGE_LABELS, KeyCombobox, TStringVar
 from .theme import THEME_LABELS
 from .util import (
     MOD_ALT,
@@ -71,9 +72,14 @@ class SettingsDialog(tk.Toplevel):
         self.capture_btn.grid(row=1, column=1, padx=(6, 0), pady=(2, 10))
 
         ttk.Label(g, text="Darstellung:").grid(row=2, column=0, sticky="w")
-        self.theme_var = tk.StringVar(value=THEME_LABELS.get(cfg.get("theme", "system")))
-        ttk.Combobox(g, textvariable=self.theme_var, values=list(THEME_LABELS.values()),
-                     state="readonly", width=20).grid(row=3, column=0, sticky="w", pady=(2, 10))
+        self.theme_var = tk.StringVar(value=cfg.get("theme", "system"))
+        KeyCombobox(g, self.theme_var, list(THEME_LABELS), list(THEME_LABELS.values()),
+                    width=20).grid(row=3, column=0, sticky="w", pady=(2, 10))
+        ttk.Label(g, text="Sprache (Neustart nötig):").grid(row=2, column=1, sticky="w",
+                                                            padx=(6, 0))
+        self.lang_var = tk.StringVar(value=cfg.get("language", "auto"))
+        KeyCombobox(g, self.lang_var, list(LANGUAGE_LABELS), list(LANGUAGE_LABELS.values()),
+                    width=24).grid(row=3, column=1, sticky="w", padx=(6, 0), pady=(2, 10))
 
         ttk.Label(g, text="Treffer pro Seite:").grid(row=4, column=0, sticky="w")
         self.max_var = tk.StringVar(value=str(app.max_display))
@@ -99,9 +105,9 @@ class SettingsDialog(tk.Toplevel):
         nb.add(s, text="Suche")
         s.columnconfigure(0, weight=1)
         ttk.Label(s, text="Suchmodus:").grid(row=0, column=0, sticky="w")
-        self.backend_var = tk.StringVar(value=BACKEND_LABELS[cfg.get("backend", "auto")])
-        ttk.Combobox(s, textvariable=self.backend_var, values=list(BACKEND_LABELS.values()),
-                     state="readonly", width=44).grid(row=1, column=0, sticky="w", pady=(2, 12))
+        self.backend_var = tk.StringVar(value=cfg.get("backend", "auto"))
+        KeyCombobox(s, self.backend_var, list(BACKEND_LABELS), list(BACKEND_LABELS.values()),
+                    width=44).grid(row=1, column=0, sticky="w", pady=(2, 12))
         ttk.Label(s, text="Ausgeschlossene Ordner (einer pro Zeile):").grid(
             row=2, column=0, sticky="w")
         ttk.Label(s, text="Ordnername (z. B. node_modules) oder vollständiger Pfad. "
@@ -253,8 +259,8 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror("ALLES", "Bitte mindestens einen Ordner für den eigenen "
                                           "Index angeben.", parent=self)
             return
-        theme = next(k for k, v in THEME_LABELS.items() if v == self.theme_var.get())
-        backend = next(k for k, v in BACKEND_LABELS.items() if v == self.backend_var.get())
+        theme = self.theme_var.get()
+        backend = self.backend_var.get()
         excludes = [ln.strip() for ln in self.excludes.get("1.0", tk.END).splitlines()
                     if ln.strip()]
         for flag, getter, setter in (
@@ -270,6 +276,7 @@ class SettingsDialog(tk.Toplevel):
             "excludes": excludes, "everything_exe": exe, "auto_repair": self.auto_var.get(),
             "index_roots": roots, "index_refresh_minutes": self.refresh_var.get(),
             "hotkey": self.new_combo, "auto_update": self.update_var.get(),
+            "language": self.lang_var.get(),
         })
         self.destroy()
 
@@ -326,7 +333,7 @@ class DuplicatesDialog(tk.Toplevel):
 
         bottom = ttk.Frame(self, padding=12)
         bottom.pack(fill=tk.X)
-        self.status = tk.StringVar(value="Bereit.")
+        self.status = TStringVar(value="Bereit.")
         ttk.Label(bottom, textvariable=self.status).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(bottom, text="In den Papierkorb", command=self._recycle).pack(side=tk.RIGHT)
         ttk.Button(bottom, text="Im Explorer zeigen", command=self._reveal).pack(
@@ -468,7 +475,7 @@ class UpdateDialog(tk.Toplevel):
         notes.configure(state="disabled")
         notes.pack(fill=tk.BOTH, expand=True)
         self.progress = ttk.Progressbar(frm, mode="determinate", maximum=100)
-        self.status = tk.StringVar(value=self._kind_text())
+        self.status = TStringVar(value=self._kind_text())
         ttk.Label(frm, textvariable=self.status, style="Hint.TLabel", wraplength=520).pack(
             anchor="w", pady=(10, 0))
         btns = ttk.Frame(frm)
@@ -573,7 +580,7 @@ class RenameDialog(tk.Toplevel):
         self.regex, self.case = tk.BooleanVar(), tk.BooleanVar()
         self.template = tk.StringVar(value=rows[0].name if self.single else "{name}_{n:02}")
         self.start = tk.StringVar(value="1")
-        self.info = tk.StringVar()
+        self.info = TStringVar()
 
         if self.single:
             ttk.Label(frm, text="Neuer Name:").grid(row=0, column=0, sticky="w")

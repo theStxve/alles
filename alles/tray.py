@@ -265,10 +265,11 @@ class TrayHotkey:
                           self.hotkey_combo == self.preferred_combo)
 
     def _show_menu(self):
+        from .i18n import _
         menu = user32.CreatePopupMenu()
-        user32.AppendMenuW(menu, MF_STRING, CMD_SHOW, "Einblenden")
+        user32.AppendMenuW(menu, MF_STRING, CMD_SHOW, _("Einblenden"))
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(menu, MF_STRING, CMD_QUIT, "Beenden")
+        user32.AppendMenuW(menu, MF_STRING, CMD_QUIT, _("Beenden"))
         user32.SetMenuDefaultItem(menu, CMD_SHOW, 0)
         pt = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(pt))

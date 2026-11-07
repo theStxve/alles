@@ -22,7 +22,7 @@ import tkinter.font as tkfont
 from dataclasses import dataclass
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import __version__, shell, theme, win_style
+from . import __version__, i18n, shell, theme, win_style
 from . import config as cfgmod
 from .backends import (
     BACKEND_AUTO,
@@ -34,6 +34,7 @@ from .backends import (
     SearchError,
     Status,
 )
+from .i18n import KeyCombobox, _
 from .index.service import IndexService, IndexState
 from .index.store import IndexStore
 from .locate import find_everything_exe
@@ -343,10 +344,11 @@ class AllesApp:
                                          ("Geändert", self.v_date, DATE_PRESETS, 12),
                                          ("Sortierung", self.v_sort, SORT_OPTIONS, 16)):
             ttk.Label(fbar, text=label).pack(side=tk.LEFT)
-            cb = ttk.Combobox(fbar, textvariable=var, values=list(table), state="readonly",
-                              width=width)
+            # shows translated labels, stores the German key (config/presets stay valid)
+            cb = KeyCombobox(fbar, var, list(table), width=width)
             cb.pack(side=tk.LEFT, padx=(4, 12))
-            cb.bind("<<ComboboxSelected>>", lambda e: self._on_filter_changed(now=True))
+            cb.bind("<<ComboboxSelected>>", lambda e: self._on_filter_changed(now=True),
+                    add="+")
         self.preset_menu = tk.Menu(root, tearoff=0, postcommand=self._fill_preset_menu)
         self._menus.append(self.preset_menu)
         ttk.Menubutton(fbar, text="★ Filter", menu=self.preset_menu).pack(side=tk.LEFT)
@@ -548,7 +550,7 @@ class AllesApp:
         else:
             self.backend = self.index
             self._start_index_service()
-        self.v_mode.set(f"Suchmodus: {self.backend.label}")
+        self.v_mode.set(_(f"Suchmodus: {self.backend.label}"))
         log.info("backend: %s (mode=%s)", self.backend.label, mode)
         self._status = None
         self._update_syntax()
@@ -880,8 +882,8 @@ class AllesApp:
         key = (row.ext.lower(), row.is_dir)
         if key not in self._type_names:
             self._icon_for(row)
-        return self._type_names.get(key) or ("Ordner" if row.is_dir else
-                                             (row.ext.upper() + "-Datei" if row.ext else "Datei"))
+        return self._type_names.get(key) or _("Ordner" if row.is_dir else
+                                              (row.ext.upper() + "-Datei" if row.ext else "Datei"))
 
     def _on_tree_scroll(self, first, last):
         """Infinite scrolling: fetch the next page when the end comes into view."""
@@ -928,7 +930,7 @@ class AllesApp:
 
     # ------------------------------------------------------------------ hints
     def show_hint(self, text: str, value: str | None):
-        self.v_hint.set(text)
+        self.v_hint.set(_(text))
         self._hint_value = value
         if value is None:
             self.hint_btn.pack_forget()
@@ -1371,7 +1373,7 @@ class AllesApp:
 
     # ------------------------------------------------------------------ status
     def set_status(self, text, kind="info"):
-        self.v_status.set(text)
+        self.v_status.set(_(text))
         self.status_dot.itemconfigure("dot", fill=STATUS_COLORS.get(kind, STATUS_COLORS["info"]))
 
     def _show_status_tip(self, event=None):
@@ -1503,6 +1505,10 @@ class AllesApp:
         self.close_to_tray = bool(s["close_to_tray"])
         self.auto_repair = bool(s["auto_repair"])
         self.auto_update = bool(s.get("auto_update", True))
+        if s.get("language") and s["language"] != cfg.get("language", i18n.LANG_AUTO):
+            cfg["language"] = s["language"]
+            messagebox.showinfo("ALLES", "Die Sprache wird nach einem Neustart von ALLES "
+                                         "umgestellt.", parent=self.root)
         if s["everything_exe"]:
             cfg["everything_exe"] = s["everything_exe"]
         else:
@@ -1744,6 +1750,9 @@ def main(argv=None):
 
     from . import tray as tray_mod
 
+    cfg = cfgmod.load_config()
+    i18n.set_language(cfg.get("language", i18n.LANG_AUTO))
+    i18n.install()  # English: translate texts at the Tk boundary
     root = tk.Tk(className="ALLES")
     icon = win_style.app_icon_path()
     if icon:
@@ -1752,7 +1761,6 @@ def main(argv=None):
         except tk.TclError:
             pass
 
-    cfg = cfgmod.load_config()
     app = AllesApp(root, cfg, start_hidden=args.tray, initial_text=args.search)
     if args.folder:
         app.handle_args({"folder": args.folder})
@@ -1766,7 +1774,7 @@ def main(argv=None):
     tray = tray_mod.TrayHotkey(app.dispatch, app.toggle_window, app.show_window, app.quit,
                                on_hotkey_changed=app.on_hotkey_changed,
                                preferred_combo=preferred, icon_path=icon,
-                               tooltip=f"ALLES {__version__} – Dateisuche",
+                               tooltip=_(f"ALLES {__version__} – Dateisuche"),
                                on_message=app.on_remote_message)
     app.tray = tray
     if not tray.start():

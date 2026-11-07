@@ -8,6 +8,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 
+from .i18n import _
 from .util import fmt_count, fmt_date, fmt_size
 
 TEXT_EXTS = {
@@ -56,11 +57,13 @@ class PreviewPane(ttk.Frame):
         self.image.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold", size=bold.cget("size") + 1)
+        # textvariables bypass the translation hook - file names must stay untouched
+        self.v_title, self.v_details = tk.StringVar(), tk.StringVar()
         self.title = ttk.Label(self, style="Preview.TLabel", font=bold, wraplength=280,
-                               justify=tk.LEFT)
+                               justify=tk.LEFT, textvariable=self.v_title)
         self.title.grid(row=1, column=0, sticky="w")
         self.details = ttk.Label(self, style="PreviewHint.TLabel", justify=tk.LEFT,
-                                 wraplength=280)
+                                 wraplength=280, textvariable=self.v_details)
         self.details.grid(row=2, column=0, sticky="w", pady=(4, 8))
         mono = tkfont.Font(family="Cascadia Mono", size=9)
         if "Cascadia Mono" not in tkfont.families():
@@ -86,8 +89,8 @@ class PreviewPane(ttk.Frame):
         self._gen += 1
         self._photo = None
         self.image.configure(image="", text="")
-        self.title.configure(text="")
-        self.details.configure(text=text)
+        self.v_title.set("")
+        self.v_details.set(_(text))
         self._hide_text()
 
     def _hide_text(self):
@@ -100,14 +103,14 @@ class PreviewPane(ttk.Frame):
             return
         self._gen += 1
         gen = self._gen
-        self.title.configure(text=row.name)
+        self.v_title.set(row.name)
         lines = [self.app.type_name(row)]
         if not row.is_dir and row.size is not None:
-            lines.append(f"Größe: {fmt_size(row.size)} ({fmt_count(row.size)} Bytes)")
+            lines.append(_(f"Größe: {fmt_size(row.size)} ({fmt_count(row.size)} Bytes)"))
         if row.modified:
-            lines.append(f"Geändert: {fmt_date(row.modified)}")
-        lines.append(row.folder)
-        self.details.configure(text="\n".join(lines))
+            lines.append(_(f"Geändert: {fmt_date(row.modified)}"))
+        lines.append(row.folder)  # a path - never translated
+        self.v_details.set("\n".join(lines))
         self.image.configure(image="", text="…")
         self._hide_text()
         is_text = not row.is_dir and (row.ext.lower() in TEXT_EXTS or (

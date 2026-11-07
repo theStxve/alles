@@ -9,6 +9,11 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 
+# "de" or "en" - set by i18n.set_language(); controls number/date/key formatting
+STYLE = "de"
+_EN_KEYS = {"Rücktaste": "Backspace", "Leertaste": "Space", "Bild↑": "PgUp", "Bild↓": "PgDn",
+            "Ende": "End", "Pos1": "Home", "Einfg": "Ins", "Entf": "Del"}
+
 _SPECIAL_KEYS = {
     0x08: "Rücktaste", 0x09: "Tab", 0x0D: "Enter", 0x1B: "Esc", 0x20: "Leertaste",
     0x21: "Bild↑", 0x22: "Bild↓", 0x23: "Ende", 0x24: "Pos1",
@@ -24,7 +29,8 @@ MODIFIER_VKS = frozenset({0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C,
 
 def vk_name(vk: int) -> str:
     if vk in _SPECIAL_KEYS:
-        return _SPECIAL_KEYS[vk]
+        name = _SPECIAL_KEYS[vk]
+        return _EN_KEYS.get(name, name) if STYLE == "en" else name
     if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
         return chr(vk)
     if 0x60 <= vk <= 0x69:
@@ -36,12 +42,13 @@ def vk_name(vk: int) -> str:
 
 def vk_display(mod: int, vk: int) -> str:
     parts = []
+    en = STYLE == "en"
     if mod & MOD_CONTROL:
-        parts.append("Strg")
+        parts.append("Ctrl" if en else "Strg")
     if mod & MOD_ALT:
         parts.append("Alt")
     if mod & MOD_SHIFT:
-        parts.append("Umschalt")
+        parts.append("Shift" if en else "Umschalt")
     if mod & MOD_WIN:
         parts.append("Win")
     return "+".join(parts + [vk_name(vk)])
@@ -65,16 +72,21 @@ def fmt_size(size: int | None) -> str:
     for unit in ("KB", "MB", "GB", "TB", "PB"):
         value /= 1024
         if value < 1024 or unit == "PB":
-            return f"{value:,.1f} {unit}".replace(",", "X").replace(".", ",").replace("X", ".")
+            text = f"{value:,.1f} {unit}"
+            if STYLE == "en":
+                return text
+            return text.replace(",", "X").replace(".", ",").replace("X", ".")
     return ""  # pragma: no cover
 
 
 def fmt_date(value: _dt.datetime | None) -> str:
-    return value.strftime("%d.%m.%Y %H:%M") if value else ""
+    if not value:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M" if STYLE == "en" else "%d.%m.%Y %H:%M")
 
 
 def fmt_count(n: int) -> str:
-    return f"{n:,}".replace(",", ".")
+    return f"{n:,}" if STYLE == "en" else f"{n:,}".replace(",", ".")
 
 
 def parse_geometry(geo: str) -> tuple[int, int, int, int] | None:
