@@ -141,9 +141,35 @@ class SHFILEOPSTRUCTW(ctypes.Structure):
                 ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
 
 
-FO_DELETE = 3
+FO_MOVE, FO_COPY, FO_DELETE = 1, 2, 3
 FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 0x4, 0x10, 0x40, 0x400
-FOF_WANTNUKEWARNING = 0x4000
+FOF_NOCONFIRMMKDIR, FOF_WANTNUKEWARNING = 0x200, 0x4000
+
+
+def _double_null(paths: list[str]):
+    return ctypes.create_unicode_buffer("\0".join(os.path.normpath(p) for p in paths) + "\0\0")
+
+
+def _file_operation(func: int, paths: list[str], dest: str | None, flags: int,
+                    hwnd: int | None) -> bool:
+    if not paths:
+        return True
+    if dest:
+        # with a single source and a missing destination Windows would treat `dest`
+        # as the new *file name* - make sure it is an existing folder
+        os.makedirs(dest, exist_ok=True)
+    src = _double_null(paths)
+    dst = _double_null([dest]) if dest else None
+    op = SHFILEOPSTRUCTW()
+    op.hwnd = hwnd
+    op.wFunc = func
+    op.pFrom = ctypes.cast(src, ctypes.c_void_p)
+    op.pTo = ctypes.cast(dst, ctypes.c_void_p) if dst is not None else None
+    op.fFlags = flags
+    shell32 = ctypes.WinDLL("shell32")
+    shell32.SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
+    rc = shell32.SHFileOperationW(ctypes.byref(op))
+    return rc == 0 and not op.fAnyOperationsAborted
 
 
 def recycle(paths: list[str], hwnd: int | None = None) -> bool:
@@ -152,18 +178,18 @@ def recycle(paths: list[str], hwnd: int | None = None) -> bool:
     On drives without a recycle bin (USB sticks, network shares) Windows asks
     before deleting permanently (FOF_WANTNUKEWARNING) instead of silently nuking.
     """
-    if not paths:
-        return True
-    buf = ctypes.create_unicode_buffer("\0".join(os.path.normpath(p) for p in paths) + "\0\0")
-    op = SHFILEOPSTRUCTW()
-    op.hwnd = hwnd
-    op.wFunc = FO_DELETE
-    op.pFrom = ctypes.cast(buf, ctypes.c_void_p)
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_WANTNUKEWARNING
-    shell32 = ctypes.WinDLL("shell32")
-    shell32.SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
-    rc = shell32.SHFileOperationW(ctypes.byref(op))
-    return rc == 0 and not op.fAnyOperationsAborted
+    return _file_operation(FO_DELETE, paths, None,
+                           FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_WANTNUKEWARNING,
+                           hwnd)
+
+
+def copy_to(paths: list[str], folder: str, hwnd: int | None = None) -> bool:
+    """Copy with the native Windows dialog (progress, conflicts, Ctrl+Z in Explorer)."""
+    return _file_operation(FO_COPY, paths, folder, FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR, hwnd)
+
+
+def move_to(paths: list[str], folder: str, hwnd: int | None = None) -> bool:
+    return _file_operation(FO_MOVE, paths, folder, FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR, hwnd)
 
 
 def open_with(path: str) -> None:

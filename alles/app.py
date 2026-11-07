@@ -423,6 +423,12 @@ class AllesApp:
                       command=self.copy_names)
         c.add_command(label="Ordnerpfad kopieren", command=self.copy_folders)
         c.add_separator()
+        for label, op in (("Kopieren nach", "copy"), ("Verschieben nach", "move")):
+            sub = tk.Menu(c, tearoff=0)
+            sub.configure(postcommand=lambda m=sub, o=op: self._fill_target_menu(m, o))
+            self._menus.append(sub)
+            c.add_cascade(label=label, menu=sub)
+        c.add_separator()
         c.add_command(label="In diesem Ordner suchen", command=self.search_in_folder)
         c.add_command(label="Eigenschaften", accelerator="Alt+Enter",
                       command=self.properties_selected)
@@ -1019,6 +1025,56 @@ class AllesApp:
                 self.tree.delete(iid)
         self.set_status(f"{what} in den Papierkorb verschoben." if ok else
                         "Nicht alles konnte verschoben werden.", "ok" if ok else "err")
+
+    # -- copy / move with the native Windows dialog
+    def _fill_target_menu(self, menu: tk.Menu, op: str):
+        menu.delete(0, tk.END)
+        for target in self.cfg.get("recent_targets", [])[:8]:
+            menu.add_command(label=target, command=lambda t=target: self.transfer(op, t))
+        if self.cfg.get("recent_targets"):
+            menu.add_separator()
+        menu.add_command(label="Ordner wählen…", command=lambda: self.transfer(op))
+
+    def transfer(self, op: str, folder: str | None = None):
+        rows = self.selected_rows()
+        if not rows:
+            return
+        if folder is None:
+            recent = self.cfg.get("recent_targets") or []
+            folder = filedialog.askdirectory(
+                parent=self.root, initialdir=recent[0] if recent else None,
+                title="Kopieren nach" if op == "copy" else "Verschieben nach")
+            if not folder:
+                return
+        folder = os.path.normpath(folder)
+        self.cfg["recent_targets"] = cfgmod.push_history(self.cfg.get("recent_targets", []),
+                                                         folder, limit=8)
+        paths, hwnd = [r.path for r in rows], self.frame_hwnd()
+        fn = shell.copy_to if op == "copy" else shell.move_to
+        verb = "kopiert" if op == "copy" else "verschoben"
+        self.set_status(f"{len(paths)} Element(e) werden {verb} …", "info")
+
+        def work():  # the shell shows its own progress/conflict dialogs
+            try:
+                ok = fn(paths, folder, hwnd)
+            except OSError as exc:
+                log.warning("transfer failed: %s", exc)
+                ok = False
+            self.dispatch(self._after_transfer, op, folder, len(paths), ok)
+
+        threading.Thread(target=work, name="transfer", daemon=True).start()
+
+    def _after_transfer(self, op, folder, count, ok):
+        if op == "move":
+            for iid in list(self.tree.get_children()):
+                if not os.path.exists(self._rows[int(iid)].path):
+                    self.tree.delete(iid)
+        verb = "kopiert" if op == "copy" else "verschoben"
+        if ok:
+            self.set_status(f"{count} Element(e) nach {folder} {verb}.", "ok")
+        else:
+            self.set_status(f"Nicht alle Elemente wurden {verb} (abgebrochen oder Fehler).",
+                            "warn")
 
     def shell_action(self, fn, path):
         try:
