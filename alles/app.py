@@ -180,6 +180,9 @@ class AllesApp:
         self._build_menu()
         self._build_ui()
         self._apply_palette()
+        from .autocomplete import SyntaxCompleter
+        self.completer = SyntaxCompleter(self.search_entry, lambda: self.palette,
+                                         lambda: self._on_filter_changed(now=True))
         self._bind_keys()
         self._update_syntax()
         self.v_text.trace_add("write", lambda *_: self._on_filter_changed())
@@ -323,6 +326,14 @@ class AllesApp:
         ttk.Button(top, text="Leeren", command=self.clear_search).pack(side=tk.LEFT, padx=(6, 0))
         self.start_btn = ttk.Button(top, text="Everything starten",
                                     command=self.start_everything)
+        self._top_row = top
+        self.hint_bar = ttk.Frame(root, padding=(12, 0, 10, 2))
+        self.v_hint = tk.StringVar()
+        ttk.Label(self.hint_bar, textvariable=self.v_hint, style="Accent.TLabel").pack(
+            side=tk.LEFT)
+        self.hint_btn = ttk.Button(self.hint_bar, text="Übernehmen", command=self._apply_hint)
+        self.hint_btn.pack(side=tk.LEFT, padx=8)
+        self._hint_value = None
 
         # --- filters
         fbar = ttk.Frame(root, padding=(10, 2, 10, 2))
@@ -457,7 +468,11 @@ class AllesApp:
         r.bind_all("<Control-comma>", lambda ev: self.open_settings())
         r.bind_all("<Control-p>", lambda ev: self._toggle_preview(flip=True))
         e.bind("<Return>", self._on_search_return)
-        e.bind("<Down>", self._focus_results)
+        e.bind("<Down>", lambda ev: (self.completer.move(1), "break")[1]
+               if self.completer.active else self._focus_results())
+        e.bind("<Up>", lambda ev: (self.completer.move(-1), "break")[1]
+               if self.completer.active else None)
+        e.bind("<Tab>", lambda ev: "break" if self.completer.accept() else None)
         e.bind("<Alt-Down>", lambda ev: self._post_history())
         e.bind("<Escape>", self._on_search_escape)
         t.bind("<Double-1>", self._on_double_click)
@@ -782,6 +797,7 @@ class AllesApp:
     def _on_filter_changed(self, now=False, delay=150):
         self._update_sort_headings()
         self._update_syntax()
+        self._update_natural_hint()
         if self._search_timer:
             self.root.after_cancel(self._search_timer)
         self._search_timer = self.root.after(0 if now else delay, self.run_search)
@@ -905,8 +921,66 @@ class AllesApp:
             text += f" ({fmt_count(shown)} geladen, mehr beim Scrollen)"
         self.set_status(f"{text}  ·  {result.elapsed_ms:.0f} ms  ·  {self.backend.label}",
                         "ok" if result.total else "info")
+        if not result.total and not req.append:
+            self._check_typo()
         if not req.append:
             self.preview.show_empty()
+
+    # ------------------------------------------------------------------ hints
+    def show_hint(self, text: str, value: str | None):
+        self.v_hint.set(text)
+        self._hint_value = value
+        if value is None:
+            self.hint_btn.pack_forget()
+        elif not self.hint_btn.winfo_ismapped():
+            self.hint_btn.pack(side=tk.LEFT, padx=8)
+        if not self.hint_bar.winfo_ismapped():
+            self.hint_bar.pack(fill=tk.X, after=self._top_row)
+
+    def hide_hint(self):
+        self._hint_value = None
+        self.hint_bar.pack_forget()
+
+    def _apply_hint(self):
+        if self._hint_value is not None:
+            value = self._hint_value
+            self.hide_hint()
+            self.v_text.set(value)
+            self._remember_search()
+            self.focus_search(select=False)
+
+    def _update_natural_hint(self):
+        from .assist import natural_to_syntax
+        text = self.v_text.get()
+        syntax = natural_to_syntax(text)
+        if syntax and syntax != text.strip():
+            self.show_hint(f"Meintest du:  {syntax}", syntax)
+        else:
+            self.hide_hint()
+
+    def _check_typo(self):
+        """0 hits for a single word -> look for similar file names in the background."""
+        from .assist import close_words, is_simple_term, probe_fragments
+        text = self.v_text.get().strip()
+        if not is_simple_term(text) or self._hint_value is not None:
+            return
+        backend, gen = self.backend, self._gen
+
+        def work():
+            try:
+                names = backend.sample_names(probe_fragments(text))
+                words = close_words(text, names)
+            except Exception:  # noqa: BLE001 - hints are best effort
+                return
+            if words:
+                self.dispatch(self._show_typo_hint, gen, text, words)
+
+        threading.Thread(target=work, name="typo-hint", daemon=True).start()
+
+    def _show_typo_hint(self, gen, text, words):
+        if gen == self._gen and self.v_text.get().strip() == text:
+            others = f"  (auch: {', '.join(words[1:])})" if len(words) > 1 else ""
+            self.show_hint(f"Keine Treffer – meintest du:  {words[0]}{others}", words[0])
 
     # ------------------------------------------------------------------ presets
     def _fill_preset_menu(self):
@@ -1237,11 +1311,16 @@ class AllesApp:
         return "break"
 
     def _on_search_return(self, event=None):
+        if self.completer.accept():
+            return "break"
         self._remember_search()
         self.run_search()
         return "break"
 
     def _on_search_escape(self, event=None):
+        if self.completer.active:
+            self.completer.hide()
+            return "break"
         if self.v_text.get():
             self.clear_search()
         else:

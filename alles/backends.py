@@ -157,6 +157,21 @@ class EverythingBackend:
                                 s.get_result_extension(i), s.is_result_folder(i)))
             return SearchResult(rows, total, (time.perf_counter() - t0) * 1000)
 
+    def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
+        if self.sdk is None or not fragments:
+            return []
+        with self.lock:
+            s = self.sdk
+            s.reset()
+            s.set_search(" | ".join(fragments))
+            s.set_max(limit)
+            s.set_request_flags(es.REQUEST_FULL_PATH_AND_FILE_NAME)
+            try:
+                n = s.query(wait=True)
+            except es.EverythingError:
+                return []
+            return [os.path.basename(s.get_result_full_path(i)) for i in range(n)]
+
     def count_in(self, search: str) -> int:
         if self.sdk is None:
             return 0
@@ -219,6 +234,9 @@ class IndexBackend:
                 for h in hits]
         return SearchResult(rows, total, (time.perf_counter() - t0) * 1000,
                             capped=total >= COUNT_CAP)
+
+    def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
+        return self.store.sample_names(fragments, limit)
 
     def close(self):
         if self.service:

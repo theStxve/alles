@@ -400,6 +400,20 @@ class IndexStore:
                             bool(is_dir)))
         return hits, total
 
+    def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
+        """File names containing any of the fragments (candidates for typo hints)."""
+        frags = [f.lower() for f in fragments if f]
+        if not frags:
+            return []
+        where = " OR ".join("instr(name_lc, ?) > 0" for _ in frags)
+        with self._lock:
+            conn = self._get_reader()
+            if conn is None:
+                return []
+            rows = conn.execute(f"SELECT name FROM entries WHERE {where} LIMIT ?",
+                                [*frags, limit]).fetchall()
+        return [r[0] for r in rows]
+
     # -- incremental updates (from the file watcher)
     def apply_changes(self, changes: list[tuple[str, str]], excludes: Iterable[str]) -> int:
         """changes: list of (action, full_path) with action in add/remove/modify."""
