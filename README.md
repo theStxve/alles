@@ -42,25 +42,25 @@ der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur kl
 
 <a id="funktionen"></a>
 
-## ✨ Funktionen
+## Funktionen
 
 | | |
 |---|---|
-| 🔎 **Live-Suche** | Ergebnisse beim Tippen, veraltete Anfragen werden abgebrochen |
-| 🧭 **Zwei Suchmodi** | Everything (voidtools) **oder** eigener Index, wahlweise automatisch |
-| 🎛️ **Filter per Klick** | Typ, Größe, Datum, Laufwerke, Sortierung, Groß/Klein, Regex, Pfadsuche |
-| ⭐ **Filter-Presets** | Eingebaute Vorlagen, eigene Filterkombinationen speicherbar |
-| 🖼️ **Vorschau** | Explorer-Thumbnails für Bilder/Videos/PDFs, Textinhalt für Code und Notizen |
-| 🧹 **Duplikat-Finder** | Nach Inhalt (Hash) oder Name+Größe, ältere Kopien mit einem Klick in den Papierkorb |
-| 🚫 **Ordner ausschließen** | `node_modules`, `.git`, `WinSxS` & Co. bleiben draußen, frei einstellbar |
-| 🌙 **Dark Mode** | Folgt Windows oder fest hell/dunkel, inklusive dunkler Titelleiste |
-| 📂 **Explorer-Integration** | Rechtsklick auf einen Ordner → *Mit ALLES durchsuchen* |
-| ⌨️ **Globaler Hotkey** | `Strg+Alt+Leertaste` holt ALLES von überall nach vorn (frei belegbar) |
-| 🗂️ **Echte Datei-Icons** | Icons und Typnamen direkt aus Windows |
-| 🗑️ **Dateiaktionen** | Öffnen, Öffnen mit…, Explorer, Terminal, VS Code, Eigenschaften, Papierkorb |
-| 📤 **CSV-Export** | Ergebnislisten Excel-kompatibel exportieren |
-| 🩺 **Diagnose & Selbstheilung** | Zeigt nicht indizierte Laufwerke und startet Everything bei Bedarf neu |
-| 💼 **Portabel** | Ein `ALLES-Daten`-Ordner neben der EXE: alles bleibt auf dem USB-Stick |
+| **Live-Suche** | Ergebnisse beim Tippen, veraltete Anfragen werden abgebrochen |
+| **Zwei Suchmodi** | Everything (voidtools) **oder** eigener Index, wahlweise automatisch |
+| **Filter per Klick** | Typ, Größe, Datum, Laufwerke, Sortierung, Groß/Klein, Regex, Pfadsuche |
+| **Filter-Presets** | Eingebaute Vorlagen, eigene Filterkombinationen speicherbar |
+| **Vorschau** | Explorer-Thumbnails für Bilder/Videos/PDFs, Textinhalt für Code und Notizen |
+| **Duplikat-Finder** | Nach Inhalt (Hash) oder Name+Größe, ältere Kopien mit einem Klick in den Papierkorb |
+| **Ordner ausschließen** | `node_modules`, `.git`, `WinSxS` & Co. bleiben draußen, frei einstellbar |
+| **Dark Mode** | Folgt Windows oder fest hell/dunkel, inklusive dunkler Titelleiste |
+| **Explorer-Integration** | Rechtsklick auf einen Ordner → *Mit ALLES durchsuchen* |
+| **Globaler Hotkey** | `Strg+Alt+Leertaste` holt ALLES von überall nach vorn (frei belegbar) |
+| **Echte Datei-Icons** | Icons und Typnamen direkt aus Windows |
+| **Dateiaktionen** | Öffnen, Öffnen mit…, Explorer, Terminal, VS Code, Eigenschaften, Papierkorb |
+| **CSV-Export** | Ergebnislisten Excel-kompatibel exportieren |
+| **Diagnose & Selbstheilung** | Zeigt nicht indizierte Laufwerke und startet Everything bei Bedarf neu |
+| **Portabel** | Ein `ALLES-Daten`-Ordner neben der EXE: alles bleibt auf dem USB-Stick |
 
 ### Zwei Suchmodi
 
@@ -68,7 +68,7 @@ der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur kl
 |---|---|---|
 | Voraussetzung | Everything installiert und gestartet | keine |
 | Erster Start | sofort | einmaliges Einlesen (ca. 1 Min. pro 1–2 Mio. Dateien) |
-| Suchgeschwindigkeit | ⚡ < 50 ms | ⚡ 10–200 ms |
+| Suchgeschwindigkeit | < 50 ms | 10–200 ms |
 | Laufwerke | NTFS automatisch, andere manuell | alles, was du auswählst (auch exFAT, USB, Netzwerk) |
 | Aktualisierung | live (NTFS-Journal) | live (Ordnerüberwachung) und beim Start |
 | Adminrechte | nein | nein |
@@ -82,7 +82,7 @@ Im Modus **Automatisch** (Standard) nutzt ALLES Everything, wenn es installiert 
 
 <a id="installation"></a>
 
-## 📦 Installation
+## Installation
 
 ### Installer (empfohlen)
 
@@ -113,7 +113,7 @@ weiteren Abhängigkeiten.
 
 <a id="tastenkuerzel"></a>
 
-## ⌨️ Tastenkürzel
+## Tastenkürzel
 
 | Taste | Aktion |
 |---|---|
@@ -128,7 +128,7 @@ weiteren Abhängigkeiten.
 | `Strg+S` | Als CSV exportieren |
 | `F5` · `Esc` · `Strg+Q` | Neu suchen · Leeren/in den Tray · Beenden |
 
-## 🔤 Suchsyntax
+## Suchsyntax
 
 Die Filter erzeugen die Syntax automatisch. Du kannst sie aber auch direkt tippen, und sie
 funktioniert in **beiden** Suchmodi:
@@ -151,7 +151,7 @@ funktioniert in **beiden** Suchmodi:
 
 <a id="faq"></a>
 
-## ❓ Häufige Fragen
+## Häufige Fragen
 
 <details>
 <summary><b>„Everything läuft nicht (oder nur als Dienst)“</b></summary>
@@ -194,7 +194,7 @@ Nein. ALLES ist ein unabhängiges Open-Source-Projekt und nutzt Everything über
 offizielles SDK. Everything selbst ist nicht Teil dieses Projekts.
 </details>
 
-## 🛠️ Entwicklung
+## Entwicklung
 
 ```powershell
 pip install -e ".[dev]"
@@ -232,7 +232,7 @@ ZIP, prüft den Installer per Test-Installation und hängt alles an das Release.
 
 Ideen und Roadmap: [docs/FEATURE_IDEAS.md](docs/FEATURE_IDEAS.md) · Änderungen: [CHANGELOG.md](CHANGELOG.md)
 
-## 📄 Lizenz
+## Lizenz
 
 [MIT](LICENSE) © theStxve
 
