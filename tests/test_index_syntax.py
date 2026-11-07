@@ -89,8 +89,8 @@ def test_compile_regex_validation():
 
 
 def test_unsupported_modifier_is_reported():
-    with pytest.raises(UnsupportedSyntax, match="content:"):
-        compile_query("content:secret")
+    with pytest.raises(UnsupportedSyntax, match="dc:"):
+        compile_query("dc:today")
 
 
 def test_empty_query_matches_everything():

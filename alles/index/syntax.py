@@ -24,9 +24,10 @@ PATH = "(d.path || '\\' || e.name)"
 PATH_LC = "(d.path_lc || '\\' || e.name_lc)"
 
 SUPPORTED_MODIFIERS = {"ext", "file", "folder", "size", "dm", "datemodified", "path",
-                       "parent", "regex", "nopath", "case", "nocase", "ww", "noww"}
+                       "parent", "regex", "nopath", "case", "nocase", "ww", "noww",
+                       "content"}
 KNOWN_UNSUPPORTED = {
-    "content", "utf8content", "ansicontent", "dc", "datecreated", "da", "dateaccessed",
+    "utf8content", "ansicontent", "dc", "datecreated", "da", "dateaccessed",
     "dr", "daterun", "attrib", "attributes", "len", "child", "childcount", "dupe",
     "sizedupe", "namedupe", "empty", "type", "startwith", "endwith", "wfn",
     "wholefilename", "infolder", "depth", "root", "shell", "count", "width", "height",
@@ -368,6 +369,13 @@ class _Compiler:
 
     def term(self, t: Term) -> tuple[str, list]:
         mod, value = t.modifier, t.value
+        if mod == "content":
+            needle = value.strip()
+            if not needle:
+                return "", []
+            # evaluated last by SQLite thanks to its position in the AND chain; the
+            # function reads the file (see store.content_match)
+            return f"CONTENT_MATCH({PATH}, e.size, e.is_dir, ?)", [needle]
         if mod in KNOWN_UNSUPPORTED:
             raise UnsupportedSyntax(f"{mod}:")
         if mod == "":

@@ -150,6 +150,42 @@ def _regexp(pattern, value, _cache={}):  # noqa: B006 - intentional memo cache
     return rx.search(value) is not None
 
 
+CONTENT_MAX_BYTES = 50 * 1024 * 1024
+_CONTENT_CHUNK = 1024 * 1024
+
+
+def content_match(path, size, is_dir, needle) -> bool:
+    """True if the file contains `needle` (case-insensitive; UTF-8, UTF-16, cp1252)."""
+    if is_dir or not needle or size is None or size > CONTENT_MAX_BYTES:
+        return False
+    low = needle.lower()
+    patterns = {low.encode("utf-8"), low.encode("utf-16-le"), low.encode("cp1252", "ignore")}
+    patterns.discard(b"")
+    ascii_only = low.isascii()
+    keep = max(len(p) for p in patterns) - 1
+    tail = b""
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(_CONTENT_CHUNK)
+                if not chunk:
+                    return False
+                data = tail + chunk
+                if ascii_only:
+                    hay = data.lower()  # bytes.lower() only touches ASCII - fine here
+                    if any(p in hay for p in patterns):
+                        return True
+                else:
+                    for enc in ("utf-8", "cp1252"):
+                        if low in data.decode(enc, "ignore").lower():
+                            return True
+                    if low in data.decode("utf-16-le", "ignore").lower():
+                        return True
+                tail = data[-keep:] if keep else b""
+    except OSError:
+        return False
+
+
 def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     if readonly:
         uri = "file:" + path.replace("\\", "/") + "?mode=ro"
@@ -157,6 +193,7 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     else:
         conn = sqlite3.connect(path, check_same_thread=False, timeout=10)
     conn.create_function("REGEXP", 2, _regexp, deterministic=True)
+    conn.create_function("CONTENT_MATCH", 4, content_match)
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA cache_size=-32000")
     return conn

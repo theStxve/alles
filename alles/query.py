@@ -100,6 +100,7 @@ class SearchOptions:
     whole_word: bool = False
     regex: bool = False
     match_path: bool = False
+    content: str = ""  # search inside files (content:)
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,12 @@ def exclusion_terms(excludes) -> list[str]:
     return terms
 
 
+def has_restricting_filter(opts: SearchOptions) -> bool:
+    """Content search reads files - only allow it together with another filter."""
+    return bool(opts.text.strip() or opts.type != "Alles" or opts.size != "Egal"
+                or opts.date != "Egal")
+
+
 def build_query(opts: SearchOptions, excludes=()) -> Query:
     """Return the Everything query for the given UI options."""
     parts: list[str] = []
@@ -171,6 +178,10 @@ def build_query(opts: SearchOptions, excludes=()) -> Query:
         # the generated filters (ext:, size:, ...). The regex: modifier only
         # applies to the user's text.
         parts.append("regex:" + _quote(text) if opts.regex else text)
+
+    content = opts.content.strip().replace('"', "")
+    if content:
+        parts.append(f'content:"{content}"')
 
     parts += exclusion_terms(excludes)
 

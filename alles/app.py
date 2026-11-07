@@ -49,6 +49,7 @@ from .query import (
     Query,
     SearchOptions,
     build_query,
+    has_restricting_filter,
 )
 from .util import fmt_count, fmt_size, geometry_visible, parse_geometry, vk_display
 
@@ -144,6 +145,7 @@ class AllesApp:
             return v if v in table else default
 
         self.v_text = tk.StringVar(value=initial_text)
+        self.v_content = tk.StringVar()
         self.v_all_drives = tk.BooleanVar(value=bool(f.get("all_drives", True)))
         self.v_type = tk.StringVar(value=pick("type", TYPE_PRESETS, "Alles"))
         self.v_size = tk.StringVar(value=pick("size", SIZE_PRESETS, "Egal"))
@@ -342,6 +344,11 @@ class AllesApp:
             ttk.Checkbutton(obar, text=label, variable=var,
                             command=lambda: self._on_filter_changed(now=True)).pack(
                 side=tk.LEFT, padx=(0, 12))
+        ttk.Label(obar, text="Inhalt:").pack(side=tk.LEFT, padx=(12, 4))
+        content_entry = ttk.Entry(obar, textvariable=self.v_content, width=24)
+        content_entry.pack(side=tk.LEFT)
+        content_entry.bind("<Return>", lambda e: self.run_search())
+        self.v_content.trace_add("write", lambda *_: self._on_filter_changed(delay=500))
 
         # --- drive scope
         self.drive_frame = ttk.Frame(root, padding=(10, 2, 10, 2))
@@ -754,7 +761,7 @@ class AllesApp:
             type=self.v_type.get(), size=self.v_size.get(), date=self.v_date.get(),
             sort=self.v_sort.get(), match_case=self.v_case.get(),
             whole_word=self.v_whole.get(), regex=self.v_regex.get(),
-            match_path=self.v_path.get())
+            match_path=self.v_path.get(), content=self.v_content.get())
 
     def current_query(self, files_only: bool = False) -> Query:
         opts = self.options()
@@ -767,12 +774,12 @@ class AllesApp:
     def _update_syntax(self):
         self.v_syntax.set(self.current_query().search or "(alles)")
 
-    def _on_filter_changed(self, now=False):
+    def _on_filter_changed(self, now=False, delay=150):
         self._update_sort_headings()
         self._update_syntax()
         if self._search_timer:
             self.root.after_cancel(self._search_timer)
-        self._search_timer = self.root.after(0 if now else 150, self.run_search)
+        self._search_timer = self.root.after(0 if now else delay, self.run_search)
 
     def run_search(self, append=False):
         self._search_timer = None
@@ -780,6 +787,14 @@ class AllesApp:
         self.v_syntax.set(q.search or "(alles)")
         if self.backend is None or (self._status and not self._status.ready):
             return
+        opts = self.options()
+        if opts.content.strip() and not append:
+            if not has_restricting_filter(opts):
+                self._gen += 1  # drop results of an earlier search
+                self.set_status("Inhaltssuche liest Dateien – bitte zusätzlich einen Suchbegriff, "
+                                "Typ, Größe oder Datum wählen.", "warn")
+                return
+            self.set_status("Durchsuche Dateiinhalte … (Weitertippen bricht ab)", "info")
         self._gen += 1
         offset = len(self._rows) if append else 0
         req = SearchRequest(self._gen, q, offset, self.max_display, append)
