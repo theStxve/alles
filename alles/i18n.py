@@ -66,7 +66,7 @@ CATALOG: dict[str, str] = {
     "Windows-Kontextmenü nicht verfügbar: {0}": "Windows context menu not available: {0}",
     "F2": "F2", "Rechtsklick": "right click",
     # --- presets / filters (display only - stored values stay German)
-    "Alles": "Everything", "Nur Dateien": "Files only", "Nur Ordner": "Folders only",
+    "Alles": "All", "Nur Dateien": "Files only", "Nur Ordner": "Folders only",
     "Dokumente": "Documents", "Bilder": "Pictures", "Videos": "Videos", "Musik": "Music",
     "Archive": "Archives", "Programme": "Programs", "Code": "Code", "Egal": "Any",
     "Leer (0 B)": "Empty (0 B)", "< 1 MB": "< 1 MB", "1 - 100 MB": "1 - 100 MB",
