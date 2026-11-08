@@ -37,7 +37,7 @@ jobs:
           python-version: "3.12"
       - name: Install build tools
         run: |
-          python -m pip install --upgrade pip pyinstaller
+          python -m pip install --upgrade pip pyinstaller pytest
           choco install innosetup --no-progress -y
       - name: Fetch Everything SDKs
         shell: pwsh
