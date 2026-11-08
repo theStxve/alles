@@ -43,6 +43,8 @@ jobs:
         run: |
           python scripts/fetch_sdk.py
           python -c "from alles import everything_sdk as es; print(es.EverythingSDK().get_version())"
+          python -c "from alles.everything_sdk3 import Everything3; s = Everything3(); print('SDK3', s.dll_path, s.connect())"
+          python -m pytest -q tests/test_sdk3.py tests/test_sdk.py -rs
       - name: Build exe, installer and portable zip
         shell: pwsh
         run: ./scripts/build.ps1
