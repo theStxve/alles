@@ -101,6 +101,7 @@ CATALOG: dict[str, str] = {
     "Index-Fehler: {0}": "Index error: {0}",
     "Index wird aufgebaut: {0} Einträge  ·  {1}": "Building index: {0} entries  ·  {1}",
     "Index wird aufgebaut…": "Building index…",
+    "Suchindex wird optimiert…": "Optimizing search index…",
     "Bereit · eigener Index mit {0} Einträgen": "Ready · own index with {0} entries",
     "Verbunden mit {0}.": "Connected to {0}.", "Everything {0}": "Everything {0}",
     "Everything wird gestartet…": "Starting Everything…",
