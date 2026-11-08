@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.2.0] – 2026-11-08
+
+### Neu
+- **Auto-Update:** ALLES erkennt neue Releases, prüft den Download gegen `SHA256SUMS.txt`
+  und installiert ihn auf Wunsch selbst (Installer still, portable/EXE per Austausch).
+- **Everything 1.5** wird über das neue SDK3 (Named Pipe, auch in der `1.5a`-Instanz)
+  unterstützt. Die MIT-lizenzierte SDK3-DLL wird mitgeliefert.
+- **Windows-Kontextmenü** per Umschalt+Rechtsklick, mit allen Shell-Erweiterungen
+  (7-Zip, Git, „Senden an“, PowerToys …)
+- **Umbenennen** mit F2, Batch-Umbenennen (Suchen/Ersetzen, Regex, Platzhalter `{n:03}`,
+  `{date}` …) mit Live-Vorschau, Konfliktprüfung und Strg+Z
+- **Kopieren/Verschieben nach …** mit nativem Windows-Dialog und den letzten Zielen
+- **Inhaltssuche** (`content:`) in beiden Suchmodi
+- **Such-Assistenten:** Autovervollständigung der Syntax, natürliche Sprache
+  („pdfs von letzter woche größer 5 mb“), „Meintest du …?“ bei Tippfehlern
+- **Endloses Scrollen** statt „Weitere laden“
+- **Englische Oberfläche** (folgt Windows oder frei wählbar), englische Zahlen-/Datumsformate
+
+### Behoben
+- Bei nur einer Datei und nicht vorhandenem Zielordner hätte Windows die Datei beim
+  Kopieren/Verschieben umbenannt statt in den Ordner zu legen.
+- Das Build-Skript lädt die SDKs jetzt auch hinter Proxys bzw. TLS-Scannern (curl-Fallback).
+
 ## [2.1.0] – 2026-11-08
 
 ### Neu

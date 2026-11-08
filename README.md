@@ -47,7 +47,9 @@ der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur kl
 | | |
 |---|---|
 | **Live-Suche** | Ergebnisse beim Tippen, veraltete Anfragen werden abgebrochen |
-| **Zwei Suchmodi** | Everything (voidtools) **oder** eigener Index, wahlweise automatisch |
+| **Zwei Suchmodi** | Everything 1.4 **und 1.5** (voidtools) **oder** eigener Index, wahlweise automatisch |
+| **Such-Assistenten** | Autovervollständigung für die Syntax, „pdfs von letzter woche“ → Syntax, Tippfehler-Vorschläge |
+| **Inhaltssuche** | Text *in* Dateien finden (UTF-8, UTF-16, ANSI) – mit Everything und dem eigenen Index |
 | **Filter per Klick** | Typ, Größe, Datum, Laufwerke, Sortierung, Groß/Klein, Regex, Pfadsuche |
 | **Filter-Presets** | Eingebaute Vorlagen, eigene Filterkombinationen speicherbar |
 | **Vorschau** | Explorer-Thumbnails für Bilder/Videos/PDFs, Textinhalt für Code und Notizen |
@@ -57,7 +59,12 @@ der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur kl
 | **Explorer-Integration** | Rechtsklick auf einen Ordner → *Mit ALLES durchsuchen* |
 | **Globaler Hotkey** | `Strg+Alt+Leertaste` holt ALLES von überall nach vorn (frei belegbar) |
 | **Echte Datei-Icons** | Icons und Typnamen direkt aus Windows |
-| **Dateiaktionen** | Öffnen, Öffnen mit…, Explorer, Terminal, VS Code, Eigenschaften, Papierkorb |
+| **Dateiaktionen** | Öffnen, Öffnen mit…, Explorer, Terminal, VS Code, Eigenschaften, Papierkorb, Kopieren/Verschieben nach … |
+| **Windows-Kontextmenü** | Umschalt+Rechtsklick öffnet das echte Explorer-Menü mit 7-Zip, Git, „Senden an“ & Co. |
+| **Umbenennen** | F2 – auch für viele Dateien auf einmal, mit Platzhaltern, Vorschau und Rückgängig |
+| **Endloses Scrollen** | Weitere Treffer werden beim Scrollen automatisch nachgeladen |
+| **Auto-Update** | Neue Versionen werden erkannt, geprüft (SHA-256) und mit einem Klick installiert |
+| **Deutsch & Englisch** | Sprache folgt Windows oder ist frei wählbar |
 | **CSV-Export** | Ergebnislisten Excel-kompatibel exportieren |
 | **Diagnose & Selbstheilung** | Zeigt nicht indizierte Laufwerke und startet Everything bei Bedarf neu |
 | **Portabel** | Ein `ALLES-Daten`-Ordner neben der EXE: alles bleibt auf dem USB-Stick |
@@ -66,7 +73,7 @@ der Suchsyntax, wundern sich über fehlende Laufwerke oder wollen einfach nur kl
 
 | | Everything | Eigener Index |
 |---|---|---|
-| Voraussetzung | Everything installiert und gestartet | keine |
+| Voraussetzung | Everything 1.4 oder 1.5 installiert und gestartet | keine |
 | Erster Start | sofort | einmaliges Einlesen (ca. 1 Min. pro 1–2 Mio. Dateien) |
 | Suchgeschwindigkeit | < 50 ms | 10–200 ms |
 | Laufwerke | NTFS automatisch, andere manuell | alles, was du auswählst (auch exFAT, USB, Netzwerk) |
@@ -122,6 +129,9 @@ weiteren Abhängigkeiten.
 | `↓` / `↑` | Zwischen Suchfeld und Ergebnissen wechseln |
 | `Enter` · `Strg+Enter` · `Alt+Enter` | Öffnen · Im Explorer zeigen · Eigenschaften |
 | `Strg+T` | Terminal im Ordner öffnen |
+| `F2` · `Strg+Z` | Umbenennen · Umbenennen rückgängig |
+| `Umschalt+Rechtsklick` | Windows-Kontextmenü |
+| `Tab` | Syntax-Vorschlag übernehmen |
 | `Entf` | In den Papierkorb |
 | `Strg+C` · `Strg+Umschalt+C` | Pfade · Namen kopieren |
 | `Strg+P` | Vorschau ein/aus |
@@ -148,6 +158,7 @@ funktioniert in **beiden** Suchmodi:
 | `file:` · `folder:` | nur Dateien/Ordner | `folder:backup` |
 | `parent:` | direkt in Ordner | `parent:C:\Users` |
 | `regex:` | regulärer Ausdruck | `regex:^IMG_\d+\.jpg$` |
+| `content:` | Text im Dateiinhalt | `ext:txt content:"angebot"` |
 
 <a id="faq"></a>
 
