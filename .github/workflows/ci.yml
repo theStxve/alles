@@ -39,12 +39,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip pyinstaller
           choco install innosetup --no-progress -y
-      - name: SDK smoke test
+      - name: Fetch Everything SDKs
+        shell: pwsh
+        run: python scripts/fetch_sdk.py
+      - name: SDK smoke tests (Everything 1.4 + 1.5)
+        shell: pwsh
         run: |
-          python scripts/fetch_sdk.py
-          python -c "from alles import everything_sdk as es; print(es.EverythingSDK().get_version())"
-          python -c "from alles.everything_sdk3 import Everything3; s = Everything3(); print('SDK3', s.dll_path, s.connect())"
-          python -m pytest -q tests/test_sdk3.py tests/test_sdk.py -rs
+          # failures are reported as annotations (readable without log access)
+          $out = python -m pytest -v -rs tests/test_sdk3.py tests/test_sdk.py 2>&1
+          $code = $LASTEXITCODE
+          $out | Write-Output
+          if ($code -ne 0) {
+            $out | Select-Object -Last 25 | ForEach-Object { Write-Output "::error::$_" }
+            exit $code
+          }
       - name: Build exe, installer and portable zip
         shell: pwsh
         run: ./scripts/build.ps1
