@@ -102,7 +102,7 @@ class EverythingBackend:
             try:
                 from .everything_sdk3 import Everything3
                 self.sdk3 = Everything3()
-            except (OSError, FileNotFoundError):
+            except (OSError, AttributeError):  # missing DLL or an incompatible version
                 self.sdk3 = None
         if self.available:
             self.error = None
@@ -282,8 +282,9 @@ class IndexBackend:
             raise SearchError(f"Index-Fehler: {exc}") from exc
         rows = [Row(h.path, h.name, h.folder, h.size, unix_to_local(h.mtime), h.ext, h.is_dir)
                 for h in hits]
+        content_page_full = "CONTENT_MATCH" in compiled.where and len(hits) == limit
         return SearchResult(rows, total, (time.perf_counter() - t0) * 1000,
-                            capped=total >= COUNT_CAP)
+                            capped=total >= COUNT_CAP or content_page_full)
 
     def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
         return self.store.sample_names(fragments, limit)

@@ -76,3 +76,41 @@ def test_content_is_only_read_for_rows_passing_other_filters(tmp_path, monkeypat
     s.close()
     assert [h.name for h in hits] == ["bericht.txt"]
     assert len(calls) == 1  # not 201 file reads
+
+
+def test_needs_content_guard():
+    from alles.index.syntax import needs_content_guard
+    assert needs_content_guard('content:"x"')
+    assert needs_content_guard('!temp content:x')          # only a negation besides
+    assert not needs_content_guard('bericht content:x')
+    assert not needs_content_guard('ext:txt content:x')
+    assert not needs_content_guard('rechnung')              # no content search at all
+
+
+def test_content_term_is_evaluated_last_wherever_it_was_typed():
+    c = compile_query('content:x ext:txt')
+    assert c.where.index("CONTENT_MATCH") > c.where.index("e.ext IN")
+
+
+@pytest.mark.parametrize("word", ["größe", "rechnung"])
+def test_utf16_match_after_first_chunk(tmp_path, monkeypatch, word):
+    monkeypatch.setattr(store_mod, "_CONTENT_CHUNK", 64)  # several chunks, odd offsets
+    p = tmp_path / "u.txt"
+    p.write_text("a" * 101 + word.capitalize() + "b" * 50, encoding="utf-16")  # ß.upper()=SS
+    assert content_match(str(p), p.stat().st_size, 0, word)
+
+
+def test_content_search_skips_the_second_full_scan(tmp_path, monkeypatch):
+    calls = []
+    real = store_mod.content_match
+    monkeypatch.setattr(store_mod, "content_match", lambda *a: calls.append(1) or real(*a))
+    root = tmp_path / "d"
+    root.mkdir()
+    for i in range(30):
+        (root / f"bericht{i}.txt").write_text("treffer")
+    s = IndexStore(str(tmp_path / "i.db"))
+    s.rebuild([str(root)], [])
+    hits, total = s.search(compile_query('bericht content:treffer'), 1, 0, 10)
+    s.close()
+    assert len(hits) == 10 and total == 11      # "more" without counting everything
+    assert len(calls) == 30                    # each candidate read once, not twice

@@ -5,12 +5,12 @@ import os
 
 datas = [("assets/alles.ico", "assets")]
 binaries = []
-if os.path.exists("Everything64.dll"):
-    binaries.append(("Everything64.dll", "."))
-if os.path.exists("Everything3_x64.dll"):  # Everything 1.5 (SDK3, MIT licensed)
-    binaries.append(("Everything3_x64.dll", "."))
-else:
-    print("WARNUNG: Everything64.dll fehlt - python scripts/fetch_sdk.py ausführen")
+for dll in ("Everything64.dll",      # Everything 1.4 (SDK2)
+            "Everything3_x64.dll"):  # Everything 1.5 (SDK3, MIT licensed)
+    if os.path.exists(dll):
+        binaries.append((dll, "."))
+    else:
+        print(f"WARNUNG: {dll} fehlt - python scripts/fetch_sdk.py ausführen")
 
 a = Analysis(
     ["run_alles.py"],

@@ -307,6 +307,35 @@ def _wildcard_to_regex(text: str) -> str:
     return "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in text)
 
 
+def _reads_files(node) -> bool:
+    if isinstance(node, Term):
+        return node.modifier == "content"
+    if isinstance(node, Not):
+        return _reads_files(node.child)
+    if isinstance(node, (And, Or)):
+        return any(_reads_files(x) for x in node.items)
+    return False
+
+
+def needs_content_guard(text: str) -> bool:
+    """True if the query searches file contents without any other positive term
+    (that would read every file on the disk)."""
+    tokens = tokenize(text)
+    has_content, other = False, False
+    negated = False
+    for tok in tokens:
+        if tok == "!":
+            negated = True
+            continue
+        if isinstance(tok, Term):
+            if tok.modifier == "content":
+                has_content = True
+            elif not negated and (tok.value or tok.modifier in ("file", "folder")):
+                other = True
+        negated = False
+    return has_content and not other
+
+
 class _Compiler:
     def __init__(self, flags: Flags, now=None):
         self.flags = flags
@@ -314,7 +343,9 @@ class _Compiler:
 
     def compile(self, node) -> tuple[str, list]:
         if isinstance(node, And):
-            parts = [self.compile(x) for x in node.items]
+            # content: reads files -> always evaluate it after every cheap condition
+            items = sorted(node.items, key=_reads_files)
+            parts = [self.compile(x) for x in items]
             parts = [p for p in parts if p[0]]
             if not parts:
                 return "", []

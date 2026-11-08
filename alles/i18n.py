@@ -61,6 +61,8 @@ CATALOG: dict[str, str] = {
     "In diesem Ordner suchen": "Search in this folder", "Eigenschaften": "Properties",
     "In den Papierkorb": "Move to recycle bin", "Ordner wählen…": "Choose folder…",
     "Windows-Kontextmenü…": "Windows context menu…",
+    "Windows-Menü gilt nur für einen Ordner: {0} von {1} Elementen.":
+        "The Windows menu works for one folder only: {0} of {1} items.",
     "Windows-Kontextmenü nicht verfügbar: {0}": "Windows context menu not available: {0}",
     "F2": "F2", "Rechtsklick": "right click",
     # --- presets / filters (display only - stored values stay German)
@@ -313,6 +315,8 @@ CATALOG: dict[str, str] = {
     "Mehrere Dateien bekommen denselben Namen": "Several files would get the same name",
     "Datei mit diesem Namen existiert bereits": "A file with this name already exists",
     "Ungültiger regulärer Ausdruck: {0}": "Invalid regular expression: {0}",
+    "Liegt in einem Ordner, der ebenfalls umbenannt wird":
+        "Is inside a folder that is renamed too",
     # --- preview
     "Wähle eine Datei aus, um eine Vorschau zu sehen.": "Select a file to see a preview.",
     "Größe: {0} ({1} Bytes)": "Size: {0} ({1} bytes)", "Geändert: {0}": "Modified: {0}",

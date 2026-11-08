@@ -37,6 +37,7 @@ from .backends import (
 from .i18n import KeyCombobox, _
 from .index.service import IndexService, IndexState
 from .index.store import IndexStore
+from .index.syntax import needs_content_guard
 from .locate import find_everything_exe
 from .preview import PreviewPane
 from .query import (
@@ -813,8 +814,9 @@ class AllesApp:
         if self.backend is None or (self._status and not self._status.ready):
             return
         opts = self.options()
-        if opts.content.strip() and not append:
-            if not has_restricting_filter(opts):
+        searches_content = "content:" in q.search.lower()
+        if searches_content and not append:
+            if not has_restricting_filter(opts) or needs_content_guard(q.search):
                 self._gen += 1  # drop results of an earlier search
                 self.set_status("Inhaltssuche liest Dateien – bitte zusätzlich einen Suchbegriff, "
                                 "Typ, Größe oder Datum wählen.", "warn")
@@ -1162,10 +1164,12 @@ class AllesApp:
         if not done:
             return
         from . import rename
-        errors = rename.undo(done)
-        self._last_rename = None
-        self.after_rename([(new, old) for old, new in done], errors)
-        self._last_rename = None
+        reverted, errors = rename.undo(done)
+        self.after_rename(reverted, errors)  # only what really went back
+        failed = {os.path.normcase(new) for old, new in done} - {
+            os.path.normcase(new) for new, old in reverted}
+        # keep the failed ones so Ctrl+Z can be retried (e.g. after closing the file)
+        self._last_rename = [(o, n) for o, n in done if os.path.normcase(n) in failed] or None
         self.set_status("Umbenennen rückgängig gemacht.", "ok" if not errors else "warn")
 
     # -- copy / move with the native Windows dialog
@@ -1382,8 +1386,16 @@ class AllesApp:
                 return True
             return False
 
+        paths = [r.path for r in rows]
+        if not shellmenu.same_folder(paths):
+            # the shell builds menus for one folder only -> say so instead of silently
+            # acting on fewer items than selected
+            first = os.path.normcase(os.path.dirname(paths[0]))
+            paths = [p for p in paths if os.path.normcase(os.path.dirname(p)) == first]
+            self.set_status(f"Windows-Menü gilt nur für einen Ordner: {len(paths)} von "
+                            f"{len(rows)} Elementen.", "warn")
         try:
-            verb = shellmenu.show([r.path for r in rows], x, y, extended, own_verbs)
+            verb = shellmenu.show(paths, x, y, extended, own_verbs)
         except OSError as exc:
             self.set_status(f"Windows-Kontextmenü nicht verfügbar: {exc}", "err")
             return

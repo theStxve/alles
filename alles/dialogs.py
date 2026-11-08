@@ -507,6 +507,7 @@ class UpdateDialog(tk.Toplevel):
         self.destroy()
 
     def _skip(self):
+        self._stop.set()  # a running download must not install afterwards
         self.app.cfg["update_skip"] = self.release.version
         self.app.save_config()
         self.app.update_btn.pack_forget()
@@ -548,6 +549,8 @@ class UpdateDialog(tk.Toplevel):
 
     def _install(self, path):
         u = self._upd
+        if self._stop.is_set() or not self.winfo_exists():
+            return  # dialog was closed / version skipped while downloading
         self.status.set("Installiere Update …")
         try:
             if self.kind == u.KIND_INSTALLER:

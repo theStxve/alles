@@ -162,7 +162,8 @@ def content_match(path, size, is_dir, needle) -> bool:
     patterns = {low.encode("utf-8"), low.encode("utf-16-le"), low.encode("cp1252", "ignore")}
     patterns.discard(b"")
     ascii_only = low.isascii()
-    keep = max(len(p) for p in patterns) - 1
+    keep = max(len(p) for p in patterns)
+    keep += keep % 2  # even overlap keeps every chunk aligned for UTF-16 decoding
     tail = b""
     try:
         with open(path, "rb") as f:
@@ -387,6 +388,9 @@ class IndexStore:
                 rows = conn.execute(sql, [*compiled.params, limit, offset]).fetchall()
                 if len(rows) < limit:
                     total = offset + len(rows)
+                elif "CONTENT_MATCH" in compiled.where:
+                    # counting would read every candidate file a second time
+                    total = offset + len(rows) + 1
                 else:
                     total = conn.execute(
                         f"SELECT count(*) FROM (SELECT 1 {base} LIMIT {COUNT_CAP})",

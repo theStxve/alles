@@ -98,8 +98,10 @@ def plan(items: list[tuple[str, bool, _dt.datetime | None]], mode: str, *, find:
 
 
 def _mark_conflicts(plans: list[RenamePlan]) -> None:
+    _mark_nested(plans)
     targets: dict[str, int] = {}
-    olds = {os.path.normcase(p.old) for p in plans}
+    # only names that really get freed up may be reused by another item
+    olds = {os.path.normcase(p.old) for p in plans if p.changed and not p.error}
     for p in plans:
         if p.error or not p.changed:
             continue
@@ -113,6 +115,18 @@ def _mark_conflicts(plans: list[RenamePlan]) -> None:
             p.error = "Mehrere Dateien bekommen denselben Namen"
         elif key != os.path.normcase(p.old) and key not in olds and os.path.exists(p.new):
             p.error = "Datei mit diesem Namen existiert bereits"
+
+
+def _mark_nested(plans: list[RenamePlan]) -> None:
+    """A folder and something inside it can't be renamed in one go (the temp names
+    would end up under the folder's old path)."""
+    moving = [os.path.normcase(p.old) + os.sep for p in plans if p.changed and not p.error]
+    for p in plans:
+        if p.error or not p.changed:
+            continue
+        me = os.path.normcase(p.old)
+        if any(me.startswith(folder) for folder in moving if folder != me + os.sep):
+            p.error = "Liegt in einem Ordner, der ebenfalls umbenannt wird"
 
 
 def execute(plans: list[RenamePlan]) -> tuple[list[tuple[str, str]], list[str]]:
@@ -140,6 +154,6 @@ def execute(plans: list[RenamePlan]) -> tuple[list[tuple[str, str]], list[str]]:
     return done, errors
 
 
-def undo(done: list[tuple[str, str]]) -> list[str]:
-    plans = [RenamePlan(new, old) for old, new in done]
-    return execute(plans)[1]
+def undo(done: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Reverse a previous execute(). Returns (reverted [(new, old)], errors)."""
+    return execute([RenamePlan(new, old) for old, new in done])
