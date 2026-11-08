@@ -25,3 +25,6 @@ Third-party notice:
 "Everything" and the Everything SDK (Everything64.dll) are made by voidtools
 (https://www.voidtools.com). They are NOT covered by this license and are not
 part of this repository. ALLES is not affiliated with or endorsed by voidtools.
+
+The Everything 1.5 SDK (Everything3_x64.dll) bundled with release builds is
+MIT licensed, (c) voidtools / David Carpenter - see licenses/Everything-SDK3-LICENSE.txt.

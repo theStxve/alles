@@ -13,6 +13,10 @@ _REG_LOCATIONS = [
     ("HKLM", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Everything",
      "UninstallString"),
     ("HKCU", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Everything", "UninstallString"),
+    ("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Everything 1.5a",
+     "UninstallString"),
+    ("HKCU", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Everything 1.5a",
+     "UninstallString"),
 ]
 
 
@@ -22,6 +26,8 @@ def _common_paths() -> list[str]:
         base = os.environ.get(env)
         if base:
             paths.append(os.path.join(base, "Everything", "Everything.exe"))
+            # Everything 1.5 (alpha) installs side by side as Everything64.exe
+            paths.append(os.path.join(base, "Everything 1.5a", "Everything64.exe"))
             if env == "LOCALAPPDATA":
                 paths.append(os.path.join(base, "Programs", "Everything", "Everything.exe"))
     return paths
@@ -47,7 +53,7 @@ def exe_from_command(cmd: str) -> str | None:
             return None
         first = cmd[:end + 4].strip('"')
     name = os.path.basename(first).lower()
-    if name == "everything.exe":
+    if name in ("everything.exe", "everything64.exe"):
         return first
     # e.g. Uninstall.exe -> Everything.exe in the same folder
     return os.path.join(os.path.dirname(first), "Everything.exe")
@@ -101,6 +107,9 @@ def find_everything_exe(configured: str | None = None, exists=os.path.isfile) ->
     if which:
         candidates.append(which)
     for c in candidates:
-        if c and exists(c):
-            return os.path.normpath(c)
+        if not c:
+            continue
+        for option in (c, os.path.join(os.path.dirname(c), "Everything64.exe")):
+            if exists(option):
+                return os.path.normpath(option)
     return _running_process_exe()

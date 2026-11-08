@@ -37,3 +37,13 @@ def test_nothing_found(monkeypatch):
     monkeypatch.setattr(locate, "_running_process_exe", lambda: None)
     monkeypatch.setattr(locate.shutil, "which", lambda name: None)
     assert locate.find_everything_exe(None, exists=lambda p: False) is None
+
+
+def test_everything_15_side_by_side(monkeypatch):
+    monkeypatch.setattr(locate, "_registry_candidates", lambda: [])
+    monkeypatch.setattr(locate, "_running_process_exe", lambda: None)
+    monkeypatch.setattr(locate.shutil, "which", lambda name: None)
+    found = locate.find_everything_exe(None, exists=lambda p: p.endswith(
+        os.path.join("Everything 1.5a", "Everything64.exe")))
+    assert found and found.endswith("Everything64.exe")
+    assert locate.exe_from_command(r'"C:\X\Everything64.exe" -startup').endswith("64.exe")

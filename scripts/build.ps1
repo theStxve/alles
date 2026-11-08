@@ -17,6 +17,7 @@ $portable = "dist\portable"
 Remove-Item $portable -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$portable\ALLES-Daten" | Out-Null
 Copy-Item dist\ALLES.exe, LICENSE $portable
+Copy-Item licenses "$portable\licenses" -Recurse
 Set-Content "$portable\ALLES-Daten\LIESMICH.txt" -Encoding utf8 -Value @(
   "Dieser Ordner aktiviert den portablen Modus:",
   "Einstellungen und Suchindex werden hier statt in %APPDATA% gespeichert.")

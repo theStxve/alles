@@ -7,6 +7,8 @@ datas = [("assets/alles.ico", "assets")]
 binaries = []
 if os.path.exists("Everything64.dll"):
     binaries.append(("Everything64.dll", "."))
+if os.path.exists("Everything3_x64.dll"):  # Everything 1.5 (SDK3, MIT licensed)
+    binaries.append(("Everything3_x64.dll", "."))
 else:
     print("WARNUNG: Everything64.dll fehlt - python scripts/fetch_sdk.py ausführen")
 

@@ -80,41 +80,56 @@ class SearchError(RuntimeError):
 
 
 class EverythingBackend:
+    """Everything 1.4 (SDK2, window messages) or Everything 1.5 (SDK3, named pipe)."""
+
     key = BACKEND_EVERYTHING
     label = "Everything"
 
     def __init__(self):
         self.sdk: es.EverythingSDK | None = None
+        self.sdk3 = None  # everything_sdk3.Everything3
         self.error: str | None = None
         self.lock = threading.Lock()
+        self.api = 2  # which SDK answered last
 
     def load(self) -> bool:
-        if self.sdk is not None:
-            return True
-        try:
-            self.sdk = es.EverythingSDK()
+        if self.sdk is None:
+            try:
+                self.sdk = es.EverythingSDK()
+            except (OSError, FileNotFoundError) as exc:
+                self.error = str(exc)
+        if self.sdk3 is None:
+            try:
+                from .everything_sdk3 import Everything3
+                self.sdk3 = Everything3()
+            except (OSError, FileNotFoundError):
+                self.sdk3 = None
+        if self.available:
             self.error = None
-            return True
-        except (OSError, FileNotFoundError) as exc:
-            self.error = str(exc)
-            return False
+        return self.available
 
     @property
     def available(self) -> bool:
-        return self.sdk is not None
+        return self.sdk is not None or self.sdk3 is not None
 
     def probe(self) -> tuple[bool, bool, tuple[int, int, int]]:
-        """(alive, db_loaded, version)."""
-        if self.sdk is None:
-            return (False, False, (0, 0, 0))
+        """(alive, db_loaded, version) - tries Everything 1.4 first, then 1.5."""
         with self.lock:
-            ver = self.sdk.get_version()
-            if ver[0] == 0:
-                return (False, False, ver)
-            return (True, self.sdk.is_db_loaded(), ver)
+            if self.sdk is not None:
+                ver = self.sdk.get_version()
+                if ver[0]:
+                    self.api = 2
+                    return (True, self.sdk.is_db_loaded(), ver)
+            if self.sdk3 is not None and self.sdk3.connect():
+                ver = self.sdk3.version()
+                if ver[0]:
+                    self.api = 3
+                    return (True, self.sdk3.is_db_loaded(), ver)
+                self.sdk3.disconnect()
+        return (False, False, (0, 0, 0))
 
     def status(self) -> Status:
-        if self.sdk is None:
+        if not self.available:
             return Status(False, "err", f"Everything-SDK nicht geladen: {self.error}")
         alive, db, ver = self.probe()
         if not alive:
@@ -125,6 +140,8 @@ class EverythingBackend:
 
     def search(self, q: Query, offset: int, limit: int,
                is_stale: Callable[[], bool]) -> SearchResult | None:
+        if self.api == 3 and self.sdk3 is not None:
+            return self._search3(q, offset, limit, is_stale)
         with self.lock:
             if is_stale() or self.sdk is None:
                 return None
@@ -157,38 +174,71 @@ class EverythingBackend:
                                 s.get_result_extension(i), s.is_result_folder(i)))
             return SearchResult(rows, total, (time.perf_counter() - t0) * 1000)
 
-    def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
-        if self.sdk is None or not fragments:
-            return []
+    def _search3(self, q: Query, offset: int, limit: int,
+                 is_stale: Callable[[], bool]) -> SearchResult | None:
         with self.lock:
+            if is_stale():
+                return None
+            t0 = time.perf_counter()
+            try:
+                found = self.sdk3.search(q.search, q.match_case, q.whole_word, q.match_path,
+                                         q.sort, offset, limit, True, is_stale)
+            except OSError as exc:
+                raise SearchError(f"Everything-Fehler: {exc}") from exc
+            if found is None:
+                return None
+            items, total = found
+            rows = []
+            for it in items:
+                folder, name = os.path.split(it.path)
+                rows.append(Row(it.path, name or it.path, folder,
+                                None if it.is_dir else it.size,
+                                _naive(es.filetime_to_datetime(it.filetime)), it.ext.lower(),
+                                it.is_dir))
+            return SearchResult(rows, total, (time.perf_counter() - t0) * 1000)
+
+    def _names(self, search: str, limit: int) -> tuple[list[str], int]:
+        """Full paths + total count for a search (diagnostics, typo hints)."""
+        with self.lock:
+            if self.api == 3 and self.sdk3 is not None:
+                try:
+                    found = self.sdk3.search(search, limit=limit, details=False)
+                except OSError:
+                    return [], 0
+                return ([it.path for it in found[0]], found[1]) if found else ([], 0)
+            if self.sdk is None:
+                return [], 0
             s = self.sdk
             s.reset()
-            s.set_search(" | ".join(fragments))
+            s.set_search(search)
             s.set_max(limit)
             s.set_request_flags(es.REQUEST_FULL_PATH_AND_FILE_NAME)
             try:
                 n = s.query(wait=True)
             except es.EverythingError:
-                return []
-            return [os.path.basename(s.get_result_full_path(i)) for i in range(n)]
+                return [], 0
+            return [s.get_result_full_path(i) for i in range(n)], s.get_total_results()
+
+    def sample_names(self, fragments: list[str], limit: int = 5000) -> list[str]:
+        if not fragments:
+            return []
+        return [os.path.basename(p) for p in self._names(" | ".join(fragments), limit)[0]]
 
     def count_in(self, search: str) -> int:
-        if self.sdk is None:
-            return 0
-        with self.lock:
-            self.sdk.reset()
-            self.sdk.set_search(search)
-            self.sdk.set_max(1)
-            try:
-                self.sdk.query(wait=True)
-            except es.EverythingError:
-                return 0
-            return self.sdk.get_total_results()
+        return self._names(search, 1)[1]
+
+    @property
+    def dll_path(self) -> str:
+        if self.api == 3 and self.sdk3 is not None:
+            return self.sdk3.dll_path
+        return self.sdk.dll_path if self.sdk else "-"
 
     def close(self):
-        if self.sdk is not None:
-            with self.lock:
+        with self.lock:
+            if self.sdk is not None:
                 self.sdk.cleanup()
+            if self.sdk3 is not None:
+                self.sdk3.disconnect()
 
 
 def _naive(value: _dt.datetime | None) -> _dt.datetime | None:

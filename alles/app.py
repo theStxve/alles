@@ -758,7 +758,7 @@ class AllesApp:
         if not ev.available:
             lines.append(f"SDK: NICHT geladen ({ev.error})")
             return "\n".join(lines)
-        lines.append(f"SDK: {ev.sdk.dll_path}")
+        lines.append(f"SDK: {ev.dll_path}")
         alive, db, ver = ev.probe()
         if not alive:
             lines += ["", "Everything antwortet nicht (läuft evtl. nur der Dienst)."]
